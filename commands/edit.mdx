@@ -1,0 +1,328 @@
+---
+title: 'curd edit'
+description: 'Manually mutate a file or symbol via AST-aware EditEngine'
+---
+
+## Overview
+
+The `edit` command performs precise, structure-aware modifications to code symbols. Unlike text-based editing, it understands language syntax and safely inserts, updates, or deletes functions, classes, and other constructs.
+
+## Syntax
+
+```bash
+curd edit [OPTIONS] <URI>
+```
+
+**Aliases:** `edt`, `e`
+
+## Parameters
+
+<ParamField path="uri" type="string" required>
+  The URI of the symbol or file to edit (e.g., `src/main.rs::my_function`)
+</ParamField>
+
+<ParamField path="--action" type="string" default="upsert">
+  The action to perform:
+  - `upsert`: Insert or update the symbol
+  - `delete`: Remove the symbol
+</ParamField>
+
+<ParamField path="--code" type="string" default="">
+  The literal code to insert (required for `upsert`, ignored for `delete`)
+</ParamField>
+
+<ParamField path="--base-state-hash" type="string">
+  Expected Merkle root of workspace state for optimistic concurrency control
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+## Behavior
+
+- All edits go into the active shadow transaction (use `curd session begin` first)
+- Validates code syntax before applying changes
+- Preserves formatting and comments where possible
+- Automatically handles overloaded symbols with interactive selection
+- Prevents edits to policy-protected files (`.curd/settings.toml`, etc.)
+- Records all mutations in audit trail (`.curd/traces/`)
+
+## Examples
+
+<CodeGroup>
+
+```bash Insert New Function
+# Add a new function to a file
+curd edit src/utils.rs::format_date --action upsert --code '
+pub fn format_date(timestamp: i64) -> String {
+    // Implementation
+    String::new()
+}
+'
+```
+
+```bash Update Existing Function
+# Replace a function's implementation
+curd edit src/api.rs::handle_request --action upsert --code '
+pub fn handle_request(req: Request) -> Response {
+    Response::new(StatusCode::OK)
+}
+'
+```
+
+```bash Delete Symbol
+# Remove a function
+curd edit src/deprecated.rs::old_function --action delete
+```
+
+```bash With State Hash
+# Optimistic concurrency check
+curd edit src/core.rs::process --action upsert \
+  --base-state-hash "abc123..." \
+  --code 'pub fn process() { }'
+```
+
+</CodeGroup>
+
+## Session Requirement
+
+Edits **require an active shadow transaction**:
+
+```bash
+# ERROR: No session
+curd edit src/main.rs::foo --action delete
+# Error: No active shadow transaction. Run 'curd session begin' first.
+
+# CORRECT: With session
+curd session begin
+curd edit src/main.rs::foo --action delete
+curd session commit
+```
+
+## Upsert vs. Delete
+
+### Upsert
+
+- Creates the symbol if it doesn't exist
+- Replaces the symbol if it already exists
+- Requires `--code` parameter
+- Code must be syntactically valid
+
+```bash
+# Create or replace
+curd edit src/lib.rs::new_function --action upsert --code '
+fn new_function() {
+    println!("Hello");
+}
+'
+```
+
+### Delete
+
+- Removes the symbol entirely
+- Ignores `--code` parameter
+- Fails if symbol doesn't exist
+
+```bash
+# Remove a function
+curd edit src/lib.rs::old_function --action delete
+```
+
+## Optimistic Concurrency Control
+
+Use `--base-state-hash` to ensure workspace hasn't changed:
+
+```bash
+# Get current state hash
+STATE_HASH=$(curd session review | jq -r '.state_hash')
+
+# Edit with concurrency check
+curd edit src/core.rs::function --action upsert \
+  --base-state-hash "$STATE_HASH" \
+  --code 'fn function() { }'
+```
+
+If the hash doesn't match:
+
+```
+Error: Workspace state has changed (expected abc123, got def456).
+Please refresh and retry.
+```
+
+## Common Patterns
+
+### Safe Refactoring Workflow
+
+```bash
+# 1. Start session
+curd session begin
+
+# 2. Make changes
+curd edit src/old_api.rs::legacy_handler --action delete
+curd edit src/new_api.rs::modern_handler --action upsert --code '
+pub fn modern_handler(req: Request) -> Response {
+    // New implementation
+}
+'
+
+# 3. Review changes
+curd session review
+
+# 4. Run tests
+curd test all
+
+# 5. Commit or rollback
+curd session commit
+```
+
+### Batch Edits
+
+```bash
+curd session begin
+
+# Delete multiple deprecated functions
+for func in old_api legacy_handler deprecated_util; do
+  curd edit src/deprecated.rs::$func --action delete
+done
+
+curd session commit
+```
+
+### Edit with Verification
+
+```bash
+curd session begin
+
+# Edit
+curd edit src/lib.rs::validate --action upsert --code '
+pub fn validate(input: &str) -> bool {
+    !input.is_empty()
+}
+'
+
+# Read back to verify
+curd read src/lib.rs::validate
+
+# Commit if correct
+curd session commit
+```
+
+## Interactive Overload Resolution
+
+For overloaded symbols:
+
+```bash
+curd edit src/api.rs::new --action delete
+
+Symbol 'new' is overloaded.
+Available options:
+  1. src/api.rs::Router::new:5 : impl Router
+  2. src/api.rs::Handler::new:42 : impl Handler
+
+Select which overload to edit: 1
+```
+
+## Policy Enforcement
+
+Edits respect workspace policies:
+
+```bash
+# Protected file
+curd edit .curd/settings.toml::config --action delete
+# Error: Policy violation - .curd/settings.toml is protected
+
+# Out-of-bounds path
+curd edit ../external/file.rs::func --action upsert --code 'fn func() {}'
+# Error: Path outside workspace boundary
+```
+
+## Conflict Resolution
+
+When committing edits, conflicts may occur:
+
+```bash
+curd session commit
+# Warning: Conflict detected in src/main.rs
+# Attempting three-way merge...
+# ✓ Auto-resolved conflict in src/main.rs:42
+```
+
+If auto-merge fails:
+
+```
+Error: Cannot auto-resolve conflict in src/main.rs
+Manual intervention required.
+```
+
+## Error Handling
+
+<AccordionGroup>
+  <Accordion title="No active shadow transaction">
+    Start a session:
+    ```bash
+    curd session begin
+    ```
+  </Accordion>
+
+  <Accordion title="Syntax error in code">
+    The engine validates syntax before applying:
+    ```
+    Error: Parse error in provided code:
+      Expected '}', found EOF at line 3
+    ```
+    
+    Fix the syntax and retry.
+  </Accordion>
+
+  <Accordion title="Symbol not found (delete)">
+    Verify the symbol exists:
+    ```bash
+    curd search symbol_name
+    curd read src/file.rs::symbol_name
+    ```
+  </Accordion>
+
+  <Accordion title="Base state hash mismatch">
+    The workspace changed since you fetched the hash:
+    ```bash
+    # Get fresh hash
+    curd session review
+    
+    # Retry edit with new hash
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Audit Trail
+
+All edits are logged:
+
+```bash
+# View recent mutations
+curd log --limit 10
+
+# Session-specific history
+curd session log
+```
+
+Log entries include:
+- Timestamp
+- URI edited
+- Action (upsert/delete)
+- Code diff
+- Agent ID (if via MCP)
+
+## Performance Notes
+
+- Single edits: &lt;100ms
+- Batch edits: Processed in shadow, committed atomically
+- Large files: May take seconds to re-parse
+- Index is invalidated and rebuilt on commit
+
+## See Also
+
+- [curd session](/commands/session) - Manage transactions
+- [curd read](/commands/read) - Verify edits
+- [curd refactor](/commands/refactor) - Higher-level transformations
+- [curd test](/commands/test) - Verify integrity after edits

@@ -1,122 +1,143 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Curd",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#21c0a7",
+    "light": "#092024",
+    "dark": "#c5d2d1"
   },
-  "favicon": "/favicon.svg",
+
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/aerospeedsta/curd"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/aerospeedsta/curd"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "installation",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/code-intelligence",
+              "concepts/shadow-workspace",
+              "concepts/profiles-and-runtime"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Command Reference",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "commands/search",
+              "commands/graph",
+              "commands/read",
+              "commands/edit",
+              "commands/workspace",
+              "commands/session",
+              "commands/build",
+              "commands/refactor",
+              "commands/test",
+              "commands/repl"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Workflow Automation",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "workflows/curd-scripts",
+              "workflows/plan-artifacts",
+              "workflows/script-lifecycle",
+              "workflows/examples"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/settings",
+              "configuration/profiles",
+              "configuration/policy",
+              "configuration/build-adapters"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "extensions/plugin-system",
+              "extensions/language-plugins",
+              "extensions/tool-plugins",
+              "extensions/plugin-trust"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/mcp-server",
+              "integration/python-binding",
+              "integration/nodejs-binding",
+              "integration/docker"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/context-linking",
+              "advanced/sandboxing",
+              "advanced/multi-workspace",
+              "advanced/troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Tools",
             "pages": [
-              "api-reference/introduction"
+              "api/tools/overview",
+              "api/tools/search",
+              "api/tools/graph",
+              "api/tools/read",
+              "api/tools/edit",
+              "api/tools/workspace",
+              "api/tools/shell",
+              "api/tools/manage-file"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "DSL Syntax",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/dsl/overview",
+              "api/dsl/statements",
+              "api/dsl/blocks",
+              "api/dsl/metadata"
+            ]
+          },
+          {
+            "group": "MCP Protocol",
+            "pages": [
+              "api/mcp/protocol",
+              "api/mcp/tools",
+              "api/mcp/session-management"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

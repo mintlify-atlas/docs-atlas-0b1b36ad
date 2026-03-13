@@ -1,0 +1,296 @@
+---
+title: "Plugin System"
+description: "Extend CURD with signed language and tool packages"
+---
+
+CURD's plugin system allows you to extend the control plane with signed, sandboxed extensions. The system supports two types of plugin packages:
+
+- **`.curdl`** — Language ecosystem packages that add support for new programming languages
+- **`.curdt`** — Native tool packages that add custom tooling capabilities
+
+Both package types are signed JSON archives installed through CURD's plugin control-plane tools and governed by a trust management system using Ed25519 cryptographic keys.
+
+## Architecture
+
+The plugin system is built on several key principles:
+
+<CardGroup cols={2}>
+  <Card title="Cryptographic Trust" icon="shield-check">
+    All plugins are signed with Ed25519 keys and verified against a trusted key set before installation
+  </Card>
+  <Card title="Sandboxed Execution" icon="lock">
+    Plugin tools run as sandboxed subprocesses with enforced resource limits and workspace confinement
+  </Card>
+  <Card title="Manifest-Driven" icon="file-code">
+    Plugin capabilities and metadata are declared in structured manifest files
+  </Card>
+  <Card title="Isolated Installation" icon="folder-tree">
+    Plugins install to `.curd/plugins/` with separate directories for language and tool packages
+  </Card>
+</CardGroup>
+
+## Plugin Package Structure
+
+Both `.curdl` and `.curdt` packages share a common archive format:
+
+```json
+{
+  "manifest": {
+    "schema_version": 1,
+    "package_id": "acme-plugin",
+    "version": "0.1.0",
+    "kind": "tool" | "language",
+    "signer_pubkey_hex": "...",
+    "description": "Package description",
+    "files": [
+      {
+        "path": "bin/tool",
+        "sha256": "...",
+        "size": 12345,
+        "executable": true
+      }
+    ],
+    "tool": { /* tool spec */ },
+    "language": { /* language spec */ }
+  },
+  "payload_files": [
+    {
+      "path": "bin/tool",
+      "content_b64": "...",
+      "executable": true
+    }
+  ],
+  "signature_hex": "..."
+}
+```
+
+### Manifest Fields
+
+<ParamField path="schema_version" type="integer" required>
+  Package schema version (currently `1`)
+</ParamField>
+
+<ParamField path="package_id" type="string" required>
+  Unique identifier using alphanumeric characters, hyphens, underscores, and dots only
+</ParamField>
+
+<ParamField path="version" type="string" required>
+  Package version string (e.g., `"0.1.0"`)
+</ParamField>
+
+<ParamField path="kind" type="enum" required>
+  Package type: `"tool"` or `"language"`
+</ParamField>
+
+<ParamField path="signer_pubkey_hex" type="string" required>
+  Ed25519 public key (64-character hex string) used to verify the signature
+</ParamField>
+
+<ParamField path="files" type="array" required>
+  List of files in the package with SHA-256 hashes for integrity verification
+</ParamField>
+
+<ParamField path="signature_hex" type="string" required>
+  Ed25519 signature of the manifest JSON (128-character hex string)
+</ParamField>
+
+## Installation Flow
+
+When you install a plugin package, CURD performs these verification steps:
+
+<Steps>
+  <Step title="Extension Verification">
+    Verifies the file extension matches the manifest `kind` (`.curdl` for language, `.curdt` for tool)
+  </Step>
+  
+  <Step title="Manifest Validation">
+    Validates manifest structure, identifiers, and metadata constraints
+  </Step>
+  
+  <Step title="Payload Hash Verification">
+    Compares SHA-256 hashes of all payload files against manifest declarations
+  </Step>
+  
+  <Step title="Trust Verification">
+    Checks if the signer's public key exists in the trusted key set and is enabled for the package kind
+  </Step>
+  
+  <Step title="Signature Verification">
+    Verifies the Ed25519 signature of the manifest using the signer's public key
+  </Step>
+  
+  <Step title="Installation">
+    Extracts files to `.curd/plugins/lang/<package_id>/` or `.curd/plugins/tool/<package_id>/`
+  </Step>
+  
+  <Step title="Registry Update">
+    Updates internal registries (e.g., `languages.toml` for language plugins)
+  </Step>
+</Steps>
+
+## Policy Configuration
+
+Plugin behavior is governed by the `[plugins]` section in `settings.toml`:
+
+```toml
+[plugins]
+install_root = ".curd/plugins"
+trusted_keys_file = ".curd/plugin_trusted_keys.json"
+require_signatures = true
+allow_unsigned_dev_plugins = false
+allow_native_language_dylibs = true
+tool_runtime = "sidecar_stdio"
+```
+
+### Policy Fields
+
+<ResponseField name="install_root" type="string" default=".curd/plugins">
+  Directory where plugins are installed
+</ResponseField>
+
+<ResponseField name="trusted_keys_file" type="string" default=".curd/plugin_trusted_keys.json">
+  Path to trusted signing keys configuration
+</ResponseField>
+
+<ResponseField name="require_signatures" type="boolean" default="true">
+  Whether to require valid signatures on all plugin packages
+</ResponseField>
+
+<ResponseField name="allow_unsigned_dev_plugins" type="boolean" default="false">
+  Allow installation of unsigned plugins for development purposes
+</ResponseField>
+
+<ResponseField name="allow_native_language_dylibs" type="boolean" default="true">
+  Permit native grammar libraries in language plugins
+</ResponseField>
+
+<ResponseField name="tool_runtime" type="string" default="sidecar_stdio">
+  Tool plugin execution mode (`"sidecar_stdio"` is the only supported value)
+</ResponseField>
+
+## Packaging Plugins
+
+Use the `curd-plugin-pack` utility to create signed plugin archives:
+
+```bash
+cargo run -q -p curd-core --bin curd-plugin-pack -- \
+  --manifest manifest.json \
+  --payload-root payload/ \
+  --out demo.curdl \
+  --private-key-file signing.key
+```
+
+The utility:
+
+1. Reads the manifest and payload files
+2. Computes SHA-256 hashes for all files
+3. Signs the manifest with your Ed25519 private key
+4. Creates a single JSON archive with embedded base64-encoded payloads
+
+<Warning>
+  Keep your Ed25519 private keys secure. Anyone with access to a trusted private key can create plugins that will be accepted by your installation.
+</Warning>
+
+## MCP Tool Interface
+
+Plugin management is exposed through MCP/native control-plane tools:
+
+### Add Language Plugin
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "add",
+    "archive_path": "/path/to/demo.curdl"
+  }
+}
+```
+
+### Add Tool Plugin
+
+```json
+{
+  "tool": "plugin_tool",
+  "args": {
+    "action": "add",
+    "archive_path": "/path/to/demo.curdt"
+  }
+}
+```
+
+### List Installed Plugins
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "list"
+  }
+}
+```
+
+### Remove Plugin
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "remove",
+    "package_id": "acme-plugin"
+  }
+}
+```
+
+## Security Considerations
+
+<Warning>
+  Plugin execution represents a potential security boundary. Always:
+  
+  - Only trust signing keys from verified sources
+  - Review plugin source code before installing
+  - Keep trusted keys limited to necessary packages
+  - Regularly audit installed plugins
+</Warning>
+
+### Sandboxing
+
+Tool plugins run in a sandboxed environment with:
+
+- Workspace-confined filesystem access
+- Subprocess resource limits (CPU, memory, timeout)
+- No network access by default
+- Enforced `json_stdio_v1` protocol
+
+### Validation
+
+All plugin packages undergo strict validation:
+
+- File paths must be relative and cannot escape the package directory
+- Identifiers must use safe characters only
+- Tool names cannot conflict with built-in CURD tools
+- Grammar libraries are validated before loading
+
+## Reference Documentation
+
+For detailed plugin specifications:
+
+<CardGroup cols={2}>
+  <Card title="Language Plugins" icon="code" href="/extensions/language-plugins">
+    `.curdl` package format and grammar integration
+  </Card>
+  <Card title="Tool Plugins" icon="wrench" href="/extensions/tool-plugins">
+    `.curdt` package format and sidecar protocol
+  </Card>
+  <Card title="Trust Management" icon="key" href="/extensions/plugin-trust">
+    Signing key management and verification
+  </Card>
+</CardGroup>
+
+## Examples
+
+Reference implementations are available in the repository:
+
+- [CURD language extension](https://github.com/aerospeedsta/curd/tree/main/examples/curd-language-extension)
+- [CURD native tool extension](https://github.com/aerospeedsta/curd/tree/main/examples/curd-native-tool-extension)
+- [Tree-sitter grammar](https://github.com/aerospeedsta/curd/tree/main/examples/tree-sitter-curd)

@@ -1,0 +1,637 @@
+---
+title: "Code Intelligence"
+description: "How CURD understands code structurally through search, graph, and read engines"
+---
+
+CURD's code intelligence layer provides **structural understanding** of your codebase. Unlike text-based tools that rely on regex patterns, CURD uses Tree-sitter parsing and graph analysis to understand code semantically.
+
+## The Three Core Operations
+
+<CardGroup cols={3}>
+  <Card title="Search" icon="magnifying-glass">
+    **Find symbols fast**
+    
+    BM25/FTS-backed ranked search to locate functions, classes, and modules
+  </Card>
+  <Card title="Graph" icon="network-wired">
+    **Understand relationships**
+    
+    Dependency and call graphs with bidirectional traversal
+  </Card>
+  <Card title="Read" icon="book-open">
+    **Extract precise context**
+    
+    URI-based reads with symbol-level or file-level granularity
+  </Card>
+</CardGroup>
+
+## Search Engine: Finding Symbols
+
+The `SearchEngine` provides fast, ranked symbol discovery using BM25 and full-text search algorithms.
+
+### How It Works
+
+<Steps>
+  <Step title="Index Building">
+    CURD scans your workspace and builds a symbol index using Tree-sitter parsers for each language.
+    
+    ```bash
+    curd init  # Creates .curd/index/
+    ```
+  </Step>
+  
+  <Step title="Symbol Extraction">
+    Tree-sitter captures:
+    - Function definitions
+    - Class declarations
+    - Method signatures
+    - Module boundaries
+    - Type definitions
+    - Variable declarations
+  </Step>
+  
+  <Step title="Ranking">
+    BM25 algorithm ranks results by relevance:
+    - Term frequency (how often the query appears)
+    - Inverse document frequency (how unique the term is)
+    - Symbol type weighting (functions rank higher than variables)
+  </Step>
+  
+  <Step title="Incremental Updates">
+    Index is cached with mtime and content hash tracking:
+    - Only changed files are re-indexed
+    - Fast subsequent searches
+    - Cache hits tracked in `IndexBuildStats`
+  </Step>
+</Steps>
+
+### Search Example
+
+<CodeGroup>
+```bash Basic Search
+curd search validate
+```
+
+```bash Search with Limit
+curd search validate --limit 20
+```
+
+```bash Search Specific File
+curd search validate --file src/auth.rs
+```
+</CodeGroup>
+
+### Search Response
+
+```json
+{
+  "results": [
+    {
+      "id": "src/auth.rs::validate",
+      "name": "validate",
+      "kind": "function",
+      "file": "src/auth.rs",
+      "start_line": 45,
+      "end_line": 52,
+      "score": 12.4,
+      "role": "Definition",
+      "signature": "pub fn validate(token: &str) -> bool"
+    }
+  ],
+  "stats": {
+    "total_symbols": 1423,
+    "cache_hits": 142,
+    "cache_misses": 8,
+    "index_time_ms": 234
+  }
+}
+```
+
+### Performance Characteristics
+
+<CardGroup cols={2}>
+  <Card title="First Index">
+    - Full workspace scan
+    - Tree-sitter parsing
+    - Symbol extraction
+    - Index serialization
+    
+    **~200-500ms for 10K files**
+  </Card>
+  <Card title="Incremental Index">
+    - mtime-based cache check
+    - Only re-parse changed files
+    - Merge with existing index
+    
+    **~50-100ms for typical changes**
+  </Card>
+</CardGroup>
+
+<Note>
+**Large File Handling:**
+
+Files exceeding `MAX_FILE_SIZE` (512KB by default) can use:
+- **Skeleton mode**: Extract top-level symbols only
+- **Skip mode**: Exclude from indexing
+- Configurable via `large_file_policy` in settings
+</Note>
+
+## Graph Engine: Understanding Relationships
+
+The `GraphEngine` builds **dependency and call graphs** to show how code connects.
+
+### Graph Construction
+
+CURD builds multiple types of edges:
+
+<Tabs>
+  <Tab title="Call Edges">
+    Function `A` calls function `B`:
+    
+    ```rust
+    pub fn validate(token: &str) -> bool {
+        is_valid_format(token) && check_signature(token)
+        // Creates edges: validate → is_valid_format
+        //                validate → check_signature
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Import Edges">
+    Module `A` imports from module `B`:
+    
+    ```rust
+    use crate::auth::validate;
+    // Creates edge: current_module → auth::validate
+    ```
+  </Tab>
+  
+  <Tab title="Ownership Edges">
+    Class/module contains members:
+    
+    ```rust
+    impl AuthValidator {
+        pub fn validate(&self) -> bool { ... }
+        // Creates edge: AuthValidator → validate (ownership)
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Type Edges">
+    Function uses or returns types:
+    
+    ```rust
+    pub fn create_user(data: UserData) -> User
+    // Creates edges: create_user → UserData
+    //                create_user → User
+    ```
+  </Tab>
+</Tabs>
+
+### Graph Query Patterns
+
+<CodeGroup>
+```bash Downstream Dependencies
+# What does this function call?
+curd graph src/lib.rs::validate --direction outgoing --depth 2
+```
+
+```bash Upstream Dependencies
+# What calls this function?
+curd graph src/lib.rs::validate --direction incoming --depth 2
+```
+
+```bash Full Impact
+# Show complete neighborhood
+curd graph src/lib.rs::validate --direction both --depth 3
+```
+
+```bash Multiple Roots
+# Analyze multiple symbols at once
+curd graph src/auth.rs::validate src/session.rs::check --direction both
+```
+</CodeGroup>
+
+### Edge Metadata and Confidence
+
+Every edge includes metadata about its reliability:
+
+```json
+{
+  "edge": {
+    "source": "src/auth.rs::validate",
+    "target": "src/crypto.rs::verify_signature",
+    "tier": "semantic",
+    "confidence": 0.95,
+    "source_method": "tree-sitter:call_expression",
+    "evidence": [
+      "line 47: verify_signature(token, key)"
+    ]
+  }
+}
+```
+
+<AccordionGroup>
+  <Accordion title="Confidence Levels" icon="gauge">
+    - **High (≥0.90)**: Tree-sitter semantic analysis
+    - **Medium (0.70-0.89)**: Heuristic call detection
+    - **Low (&lt;0.70)**: Fallback text scanning
+  </Accordion>
+  
+  <Accordion title="Edge Tiers" icon="layer-group">
+    - `semantic`: Tree-sitter confirmed
+    - `heuristic`: Pattern-based detection
+    - `stub`: Unresolved reference
+    - `bridge`: Cross-language boundary
+  </Accordion>
+</AccordionGroup>
+
+### Graph Integrity Reporting
+
+The graph includes quality metrics:
+
+```json
+{
+  "integrity": {
+    "cohesion_ratio": 0.87,
+    "total_stubs": 23,
+    "resolved_stubs": 20,
+    "symbol_density": 4.2,
+    "confidence_distribution": {
+      "high": 142,
+      "medium": 38,
+      "low": 9
+    },
+    "cycles": [
+      ["src/auth.rs::validate", "src/session.rs::check", "src/auth.rs::validate"]
+    ]
+  }
+}
+```
+
+<Warning>
+**Cycle Detection:**
+
+CURD detects circular dependencies, which can indicate:
+- Tight coupling issues
+- Potential refactoring opportunities
+- Risk of infinite recursion
+</Warning>
+
+### Graph Traversal Algorithms
+
+The `GraphEngine` supports multiple traversal modes:
+
+<Tabs>
+  <Tab title="Breadth-First">
+    Level-by-level exploration (default):
+    
+    ```rust
+    // Distance 1: Immediate neighbors
+    // Distance 2: Neighbors of neighbors
+    // ...
+    ```
+  </Tab>
+  
+  <Tab title="Depth-First">
+    Follow each branch to its end:
+    
+    ```rust
+    // Useful for dependency chains
+    // Shows transitive closure
+    ```
+  </Tab>
+  
+  <Tab title="Topological Sort">
+    Dependency-respecting order:
+    
+    ```rust
+    // Guaranteed to process dependencies before dependents
+    // Fails on cycles
+    ```
+  </Tab>
+</Tabs>
+
+## Read Engine: Extracting Context
+
+The `ReadEngine` provides **URI-based access** to code with multiple verbosity levels.
+
+### URI Format
+
+CURD uses a structured URI format for precise addressing:
+
+```
+<file>::<symbol>::<line>
+```
+
+<Tabs>
+  <Tab title="File-Level">
+    ```bash
+    curd read src/auth.rs
+    ```
+    Returns entire file contents
+  </Tab>
+  
+  <Tab title="Symbol-Level">
+    ```bash
+    curd read src/auth.rs::validate
+    ```
+    Returns the `validate` function only
+  </Tab>
+  
+  <Tab title="Line-Specific">
+    ```bash
+    curd read src/auth.rs::validate::47
+    ```
+    Returns function with line 47 highlighted
+  </Tab>
+  
+  <Tab title="Nested Symbols">
+    ```bash
+    curd read src/auth.rs::AuthValidator::validate
+    ```
+    Returns method inside a class/impl block
+  </Tab>
+</Tabs>
+
+### Verbosity Levels
+
+<CardGroup cols={3}>
+  <Card title="Level 0">
+    **Minimal**
+    
+    - Symbol signature
+    - File location
+    - Line range
+  </Card>
+  <Card title="Level 1">
+    **Standard**
+    
+    - Full source code
+    - Surrounding context
+    - Dependencies
+  </Card>
+  <Card title="Level 2+">
+    **Detailed**
+    
+    - Full source
+    - Graph neighborhood
+    - Related symbols
+    - Caller/callee info
+  </Card>
+</CardGroup>
+
+### Read Example
+
+<CodeGroup>
+```bash Minimal Read
+curd read src/auth.rs::validate --verbosity 0
+```
+
+```bash Full Context
+curd read src/auth.rs::validate --verbosity 1
+```
+
+```bash With Graph Context
+curd read src/auth.rs::validate --verbosity 2
+```
+</CodeGroup>
+
+### Shadow Workspace Reads
+
+<Info>
+The `ReadEngine` can read from either the real workspace or an active shadow workspace:
+
+```bash
+# Inside a workspace session
+curd workspace begin
+curd edit src/auth.rs::validate --code "..."
+curd read src/auth.rs::validate  # Reads modified shadow version
+```
+</Info>
+
+### Context Registry Integration
+
+CURD supports **context aliases** for linked workspaces:
+
+```bash
+# Define a context
+curd context link @upstream ~/projects/upstream --mode Index
+
+# Read from linked context
+curd read @upstream::src/lib.rs::helper
+```
+
+<Tabs>
+  <Tab title="Index Mode">
+    - Symbols are searchable and graphable
+    - File reads are **prohibited**
+    - Useful for external dependencies
+  </Tab>
+  
+  <Tab title="Read Mode">
+    - Full read access
+    - No mutation allowed
+    - Useful for reference codebases
+  </Tab>
+  
+  <Tab title="Write Mode">
+    - Full read and write access
+    - Shadow workspace support
+    - Useful for multi-repo workflows
+  </Tab>
+</Tabs>
+
+## Putting It All Together: A Typical Workflow
+
+<Steps>
+  <Step title="Search for Entry Point">
+    ```bash
+    curd search validate
+    ```
+    Returns: `src/auth.rs::validate` (score: 12.4)
+  </Step>
+  
+  <Step title="Read the Implementation">
+    ```bash
+    curd read src/auth.rs::validate --verbosity 1
+    ```
+    Shows full function body and signature
+  </Step>
+  
+  <Step title="Analyze Impact">
+    ```bash
+    curd graph src/auth.rs::validate --direction both --depth 2
+    ```
+    Reveals:
+    - **Outgoing**: Calls to `is_valid_format`, `check_signature`
+    - **Incoming**: Called by `login_handler`, `api_auth_middleware`
+  </Step>
+  
+  <Step title="Check Downstream Functions">
+    ```bash
+    curd read src/crypto.rs::check_signature --verbosity 1
+    ```
+    Understand the dependency before modifying `validate`
+  </Step>
+</Steps>
+
+## Parser Backend: Tree-sitter
+
+CURD uses **Tree-sitter** for all language parsing:
+
+<AccordionGroup>
+  <Accordion title="Why Tree-sitter?" icon="tree">
+    - **Incremental parsing**: Fast re-parsing on edits
+    - **Error recovery**: Parses incomplete/invalid code
+    - **Language-agnostic**: 40+ language grammars
+    - **Semantic accuracy**: AST-level understanding
+  </Accordion>
+  
+  <Accordion title="Supported Languages" icon="code">
+    Built-in support for:
+    - Rust, Python, JavaScript, TypeScript, Go
+    - C, C++, Java, Kotlin, Swift
+    - Ruby, PHP, Bash, YAML, TOML
+    - ...and many more via grammar registry
+  </Accordion>
+  
+  <Accordion title="Grammar Registry" icon="book">
+    Located in `curd-core/src/registry.rs`:
+    
+    ```rust
+    pub struct GrammarRegistry {
+        pub native_grammars: HashMap<String, NativeGrammar>,
+        pub plugin_grammars: HashMap<String, PluginGrammar>,
+    }
+    ```
+    
+    Supports `.curdl` language extensions for custom grammars
+  </Accordion>
+</AccordionGroup>
+
+## Compute Backend: GPU Acceleration (Experimental)
+
+CURD includes optional GPU acceleration for large-scale indexing:
+
+```rust
+pub struct ComputeBackend {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+```
+
+<Note>
+**When GPU Backend Activates:**
+- Workspace has >50K files
+- WGPU/Vulkan available on system
+- Enabled in `settings.toml`
+
+Provides **2-4x speedup** on initial index builds.
+</Note>
+
+## Performance Tuning
+
+### Index Configuration
+
+```toml
+[search]
+max_file_size = 524288  # 512KB
+large_file_policy = "skeleton"  # or "skip" or "full"
+chunk_size = 1000
+parser_backend = "native"  # or "wasm" or "hybrid"
+```
+
+### Cache Management
+
+```bash
+# View cache stats
+curd doctor .
+
+# Clear cache
+rm -rf .curd/index/
+curd init  # Rebuild
+```
+
+### Parallel Processing
+
+CURD uses Rayon for parallel indexing:
+
+```rust
+files.par_iter()
+    .map(|file| parse_and_extract_symbols(file))
+    .collect()
+```
+
+<Info>
+Parallelism automatically scales to available CPU cores. Set `RAYON_NUM_THREADS` to override.
+</Info>
+
+## Advanced Features
+
+### Semantic Code Search (Future)
+
+Planned enhancements:
+- Vector embeddings for semantic similarity
+- Natural language queries
+- Cross-language symbol resolution
+
+### Incremental Graph Updates
+
+Currently, graphs are built on-demand. Future work:
+- Persistent graph storage
+- Incremental edge updates
+- Graph change notifications
+
+### Multi-Workspace Graphs
+
+Combine graphs from multiple linked contexts:
+
+```bash
+curd graph @main::src/lib.rs::fn @dep::src/util.rs::helper --direction both
+```
+
+## API Access
+
+All code intelligence operations are available via:
+
+<CardGroup cols={3}>
+  <Card title="CLI">
+    ```bash
+    curd search
+    curd read
+    curd graph
+    ```
+  </Card>
+  <Card title="MCP Server">
+    ```json
+    {"tool": "search", ...}
+    {"tool": "read", ...}
+    {"tool": "graph", ...}
+    ```
+  </Card>
+  <Card title="REPL">
+    ```
+    > search validate
+    > read src/auth.rs::validate
+    > graph validate --depth 2
+    ```
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Shadow Workspace" icon="clone" href="/concepts/shadow-workspace">
+    Learn how mutations work safely in isolation
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the full four-layer architecture
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="/quickstart">
+    Try code intelligence in action
+  </Card>
+  <Card title="API Reference" icon="book" href="/api-reference">
+    Detailed tool documentation
+  </Card>
+</CardGroup>

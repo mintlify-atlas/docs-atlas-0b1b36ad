@@ -1,0 +1,281 @@
+---
+title: 'curd read'
+description: 'Read a file or semantic symbol exactly as the engine parses it'
+---
+
+## Overview
+
+The `read` command retrieves source code for files or specific symbols (functions, classes, etc.). It understands code structure and can extract individual symbols with their complete context.
+
+## Syntax
+
+```bash
+curd read [OPTIONS] <URI>
+```
+
+**Alias:** `red`
+
+## Parameters
+
+<ParamField path="uri" type="string" required>
+  The URI to read. Can be:
+  - File path: `src/main.rs`
+  - Symbol URI: `src/main.rs::my_function`
+  - Nested symbol: `src/main.rs::MyClass::method`
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+## Behavior
+
+- Returns source code from the active shadow transaction if one exists
+- Falls back to on-disk files if no shadow changes
+- Automatically resolves overloaded symbols with interactive selection
+- Pipes output to `$PAGER` (default: `less -R`) for large files
+- Includes metadata (file path, line numbers, symbol kind)
+
+## Examples
+
+<CodeGroup>
+
+```bash Read Entire File
+# Read a complete file
+curd read src/main.rs
+```
+
+```bash Read Specific Function
+# Extract just one function
+curd read src/api.rs::handle_request
+```
+
+```bash Read Class Method
+# Read a method from a class
+curd read src/models.rs::User::validate
+```
+
+```bash Read from Different Workspace
+# Read from another project
+curd read src/config.rs --root ~/projects/myapp
+```
+
+</CodeGroup>
+
+## Output Format
+
+The command outputs source code directly to stdout (or pager):
+
+```rust
+// When reading src/main.rs::parse_args
+fn parse_args() -> Args {
+    let cli = Cli::parse();
+    // ...
+}
+```
+
+With `--json` flag (when piped), returns structured data:
+
+```json
+{
+  "results": [
+    {
+      "uri": "src/main.rs::parse_args",
+      "source": "fn parse_args() -> Args {\n    ...",
+      "kind": "function",
+      "start_line": 42,
+      "end_line": 58
+    }
+  ]
+}
+```
+
+## Symbol URI Format
+
+### File-Level URI
+
+```bash
+curd read src/parser.rs
+```
+
+### Function URI
+
+```bash
+curd read src/parser.rs::parse_expression
+```
+
+### Method URI
+
+```bash
+curd read src/engine.rs::SearchEngine::build_index
+```
+
+### Nested Symbols
+
+```bash
+curd read src/types.rs::Module::Submodule::function
+```
+
+## Interactive Overload Resolution
+
+When a symbol name is overloaded (multiple functions with the same name), `read` presents an interactive menu:
+
+```bash
+curd read src/api.rs::new
+
+Symbol 'new' is overloaded.
+Available options:
+  1. src/api.rs::Router::new:5 : impl Router
+  2. src/api.rs::Handler::new:42 : impl Handler
+  3. src/api.rs::Config::new:89 : impl Config
+
+Select which overload to read: _
+```
+
+## Common Patterns
+
+### Code Review Workflow
+
+```bash
+# Search for a symbol
+curd search authentication
+
+# Read the implementation
+curd read src/auth.rs::authenticate_user
+
+# Check its dependencies
+curd graph src/auth.rs::authenticate_user
+```
+
+### Reading Shadow Changes
+
+```bash
+# Start a session
+curd session begin
+
+# Make an edit (via agent or CLI)
+curd edit src/config.rs::Config::validate --action upsert --code "pub fn validate(&self) -> bool { true }"
+
+# Read the changed version (from shadow)
+curd read src/config.rs::Config::validate
+
+# Compare with original
+git show HEAD:src/config.rs | grep -A 10 "fn validate"
+```
+
+### Extracting Snippets
+
+```bash
+# Extract just the function you need
+curd read src/utils.rs::format_date > snippet.rs
+```
+
+### Multi-Symbol Reading
+
+```bash
+# Read multiple related symbols
+for uri in $(curd graph src/main.rs::main --depth 1 | jq -r '.nodes[].uri'); do
+  echo "=== $uri ==="
+  curd read "$uri"
+done
+```
+
+## Shadow Transaction Integration
+
+The `read` command is shadow-aware:
+
+| Scenario | Source |
+|----------|--------|
+| No active shadow | On-disk file |
+| Symbol edited in shadow | Shadow version |
+| Symbol deleted in shadow | Returns deletion marker |
+| File created in shadow | Shadow version |
+
+```bash
+# Example workflow
+curd session begin
+
+# Edit a function
+curd edit src/lib.rs::helper --action upsert --code "pub fn helper() { println!(\"new\"); }"
+
+# Read returns the shadow version
+curd read src/lib.rs::helper
+# Output: pub fn helper() { println!("new"); }
+
+# Rollback
+curd session rollback
+
+# Now read returns original
+curd read src/lib.rs::helper
+```
+
+## Reading Linked Contexts
+
+When external contexts are linked (read-only mode):
+
+```bash
+# Link external repository
+curd context add ~/vendor/lib --alias vendorlib --read
+
+# Read symbols from linked context
+curd read vendorlib/src/api.rs::public_function
+```
+
+## Performance Notes
+
+- File reads are instant (direct filesystem access)
+- Symbol extraction requires parsing (milliseconds)
+- Large files automatically use pager
+- Repeated reads are cached
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="URI not found">
+    Check the URI format:
+    ```bash
+    # Correct
+    curd read src/main.rs::function_name
+    
+    # Incorrect
+    curd read src/main.rs:function_name  # Missing colon
+    curd read main.rs::function_name     # Missing src/
+    ```
+    
+    Verify the symbol exists:
+    ```bash
+    curd search function_name
+    ```
+  </Accordion>
+
+  <Accordion title="Overload ambiguity">
+    If non-interactive (piped), specify the exact symbol with line number:
+    ```bash
+    curd read src/api.rs::new:42
+    ```
+  </Accordion>
+
+  <Accordion title="Empty output">
+    - Symbol may be defined externally (standard library, dependencies)
+    - Check index coverage: `curd test nodes`
+    - Verify file is tracked by CURD (not in `.curdignore`)
+  </Accordion>
+
+  <Accordion title="Pager not working">
+    Set a different pager:
+    ```bash
+    export PAGER="less -R"
+    curd read src/large_file.rs
+    
+    # Or disable pager
+    export PAGER="cat"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd search](/commands/search) - Find symbols to read
+- [curd edit](/commands/edit) - Modify symbols
+- [curd graph](/commands/graph) - Explore dependencies
+- [curd session](/commands/session) - Manage shadow transactions

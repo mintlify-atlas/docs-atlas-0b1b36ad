@@ -1,0 +1,222 @@
+---
+title: Context Linking
+description: Link external repositories and codebases to extend CURD's analysis scope
+---
+
+## Overview
+
+Context linking allows you to connect external repositories or directories to your primary CURD workspace. This enables cross-repository analysis, dependency tracking, and intelligent navigation across multiple codebases without duplicating data.
+
+## Context Modes
+
+When linking a context, you can specify one of three access modes:
+
+<CardGroup cols={3}>
+  <Card title="Index" icon="magnifying-glass">
+    **Read-only indexing**
+    
+    Search and graph analysis only. The linked codebase is indexed for symbol search and dependency graphs, but file contents cannot be read directly.
+  </Card>
+  <Card title="Read" icon="book-open">
+    **Search + Read**
+    
+    All Index capabilities plus full file reading. Enables context-aware navigation and code exploration across repositories.
+  </Card>
+  <Card title="Write" icon="pen-to-square">
+    **Full Access**
+    
+    Complete read/write access (excluding shell execution). Allows edits and refactoring operations across linked contexts.
+  </Card>
+</CardGroup>
+
+## Adding Contexts
+
+### Basic Usage
+
+Link an external repository with default Write mode:
+
+```bash
+curd context add /path/to/external/repo
+```
+
+The context will be auto-aliased as `@repo_name` based on the directory name.
+
+### Specify Custom Alias
+
+```bash
+curd context add /path/to/api-server --alias @api
+```
+
+### Read-Only Context
+
+For reference codebases you don't intend to modify:
+
+```bash
+curd context add /path/to/stdlib --read
+```
+
+### Index-Only Context
+
+For large monorepos where you only need search capabilities:
+
+```bash
+curd context add /path/to/monorepo --index
+```
+
+<Info>
+  Context paths are automatically resolved to absolute paths and canonicalized. Relative paths are resolved from your current working directory.
+</Info>
+
+## Listing Contexts
+
+View all linked contexts and their modes:
+
+```bash
+curd context list
+```
+
+**Example output:**
+
+```
+Linked Contexts:
+  @api -> /home/user/projects/api-server (Mode: "write")
+  @stdlib -> /usr/local/lib/stdlib (Mode: "read")
+  @monorepo -> /opt/company/monorepo (Mode: "index")
+```
+
+## Removing Contexts
+
+### Safe Removal
+
+CURD checks for dangling dependencies before removing a context:
+
+```bash
+curd context remove @api
+```
+
+If your workspace has active function calls or imports from the linked context, removal is blocked:
+
+```
+WARNING: `src/client.rs::connect` calls `@api::server::start`
+WARNING: `src/auth.rs::login` calls `@api::auth::verify`
+
+Cannot remove context. Your primary workspace is actively calling 
+functions in this repository. Use --force to override.
+```
+
+### Force Removal
+
+Override dependency checks (use with caution):
+
+```bash
+curd context remove @api --force
+```
+
+<Warning>
+  Force removal may break cross-repository references in your dependency graph and cause subsequent analysis operations to fail.
+</Warning>
+
+## Cross-Repository Navigation
+
+Once contexts are linked, you can reference symbols across repositories using the alias:
+
+### Search Across Contexts
+
+```bash
+curd search "@api::authenticate"
+```
+
+### Read Functions from Linked Contexts
+
+Use the MCP `read` tool or CLI:
+
+```bash
+curd read @api::auth/verify.rs::verify_token
+```
+
+### Dependency Graph Analysis
+
+The `graph` tool automatically includes linked contexts:
+
+```bash
+curd graph --from src/client.rs
+```
+
+This reveals dependencies flowing into external repositories.
+
+## Storage and Configuration
+
+Context links are stored in `.curd/contexts.json` at your workspace root:
+
+```json
+{
+  "contexts": {
+    "@api": {
+      "path": "/home/user/projects/api-server",
+      "mode": "write"
+    },
+    "@stdlib": {
+      "path": "/usr/local/lib/stdlib",
+      "mode": "read"
+    }
+  }
+}
+```
+
+<Tip>
+  Add `.curd/contexts.json` to version control if your team shares the same context layout, or to `.gitignore` if contexts are developer-specific.
+</Tip>
+
+## Use Cases
+
+### Microservices Architecture
+
+Link all service repositories to analyze cross-service dependencies:
+
+```bash
+curd context add ../auth-service --alias @auth --read
+curd context add ../payment-service --alias @payment --read
+curd context add ../user-service --alias @users
+```
+
+### Mono-Repository with External Dependencies
+
+Index large vendor directories without full read overhead:
+
+```bash
+curd context add vendor/react --alias @react --index
+curd context add vendor/typescript --alias @ts --index
+```
+
+### Shared Library Development
+
+Link your main application to analyze library usage:
+
+```bash
+cd /path/to/main-app
+curd context add /path/to/my-lib --alias @mylib
+```
+
+Now edits to `@mylib` can be validated against usage patterns in the main app.
+
+## Implementation Details
+
+Context linking is implemented in `curd-core/src/context_link.rs`:
+
+- **ContextRegistry**: Manages the mapping of aliases to paths and modes
+- **ContextMode**: Enum defining Index/Read/Write access levels
+- **Persistence**: JSON serialization to `.curd/contexts.json`
+- **Validation**: Path canonicalization and existence checks during add operations
+
+For advanced integrations, see the [ContextRegistry API documentation](/advanced/context-linking).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Workspace Management" icon="layer-group" href="/advanced/multi-workspace">
+    Learn how to work with multiple CURD workspaces simultaneously
+  </Card>
+  <Card title="Sandboxing" icon="shield" href="/advanced/sandboxing">
+    Understand CURD's security model for shell execution
+  </Card>
+</CardGroup>

@@ -1,0 +1,309 @@
+---
+title: 'read'
+description: 'URI-based code reading with contextual metadata'
+---
+
+## Description
+
+The `read` tool retrieves source code for files or symbols with configurable verbosity levels. It supports file-level and symbol-level reads, with optional graph context for understanding dependencies.
+
+## Request Parameters
+
+<ParamField path="uris" type="array" required>
+  Array of URIs to read. Supports:
+  - **File URIs**: `"src/lib.rs"` - Returns all symbols in file
+  - **Symbol URIs**: `"src/lib.rs::calculate"` - Returns specific function/class
+  - **Overloaded symbols**: `"src/lib.rs::calculate::42"` - Disambiguate by line number
+  - **External context**: `"@rust-analyzer::InlayHints"` - Read from linked repo
+</ParamField>
+
+<ParamField path="verbosity" type="number">
+  Detail level (0-2):
+  - `0` - Outline only (names, line numbers, no source)
+  - `1` - Full source code (default)
+  - `2` - Source + graph context (callers/callees)
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+### File-Level Response
+
+<ResponseField name="uri" type="string" required>
+  Original input URI
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  Always `"file"` for file-level reads
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Full file contents (verbosity >= 1)
+</ResponseField>
+
+<ResponseField name="functions" type="array" required>
+  Array of function symbols in file
+  
+  <Expandable>
+    <ResponseField name="name" type="string">Function name</ResponseField>
+    <ResponseField name="start_line" type="number">Start line</ResponseField>
+    <ResponseField name="end_line" type="number">End line</ResponseField>
+    <ResponseField name="id" type="string">Canonical symbol ID</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="classes" type="array" required>
+  Array of class/struct symbols in file
+</ResponseField>
+
+### Symbol-Level Response
+
+<ResponseField name="uri" type="string" required>
+  Original input URI
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  Symbol type: `"function"` or `"class"`
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Symbol name
+</ResponseField>
+
+<ResponseField name="start_line" type="number" required>
+  Start line number
+</ResponseField>
+
+<ResponseField name="end_line" type="number" required>
+  End line number
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Source code (verbosity >= 1)
+</ResponseField>
+
+<ResponseField name="callers" type="array">
+  Direct callers (verbosity >= 2)
+</ResponseField>
+
+<ResponseField name="callees" type="array">
+  Direct callees (verbosity >= 2)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json File Read (Outline)
+{
+  "uris": ["src/lib.rs"],
+  "verbosity": 0
+}
+```
+
+```json Symbol Read (Full Source)
+{
+  "uris": ["src/lib.rs::calculate_score"],
+  "verbosity": 1
+}
+```
+
+```json Symbol Read (With Context)
+{
+  "uris": ["src/scoring.rs::calculate"],
+  "verbosity": 2
+}
+```
+
+```json Disambiguate Overload
+{
+  "uris": ["src/lib.rs::process::42"],
+  "verbosity": 1
+}
+```
+
+```json External Context Read
+{
+  "uris": ["@rust-analyzer::InlayHints::render"],
+  "verbosity": 1
+}
+```
+
+</CodeGroup>
+
+### Response Examples
+
+#### File Read (verbosity: 0)
+
+```json
+{
+  "uri": "src/lib.rs",
+  "type": "file",
+  "functions": [
+    {
+      "name": "calculate_score",
+      "start_line": 10,
+      "end_line": 25,
+      "id": "src/lib.rs::calculate_score"
+    },
+    {
+      "name": "normalize",
+      "start_line": 27,
+      "end_line": 35,
+      "id": "src/lib.rs::normalize"
+    }
+  ],
+  "classes": []
+}
+```
+
+#### Symbol Read (verbosity: 1)
+
+```json
+{
+  "uri": "src/lib.rs::calculate_score",
+  "type": "function",
+  "name": "calculate_score",
+  "start_line": 10,
+  "end_line": 25,
+  "source": "pub fn calculate_score(input: &str) -> f64 {\n    let normalized = normalize(input);\n    normalized * 100.0\n}"
+}
+```
+
+#### Symbol Read (verbosity: 2)
+
+```json
+{
+  "uri": "src/scoring.rs::calculate",
+  "type": "function",
+  "name": "calculate",
+  "start_line": 42,
+  "end_line": 58,
+  "source": "pub fn calculate(x: f64, y: f64) -> f64 {\n    x + y\n}",
+  "callers": ["src/main.rs::main", "src/lib.rs::process"],
+  "callees": []
+}
+```
+
+## Overload Disambiguation
+
+When a symbol name matches multiple definitions (e.g., function overloads), CURD returns an error with available options:
+
+```json Error: Ambiguous symbol
+{
+  "uri": "src/lib.rs::process",
+  "error": "Symbol 'process' is overloaded. Please disambiguate by appending the line number to the URI (e.g., 'src/lib.rs::process::LINE_NUMBER').\nAvailable options:\nsrc/lib.rs::process::10: pub fn process(input: &str)\nsrc/lib.rs::process::42: pub fn process(input: i32)"
+}
+```
+
+Resolve by specifying the line number:
+
+```json
+{
+  "uris": ["src/lib.rs::process::42"]
+}
+```
+
+## External Context Reads
+
+Read symbols from linked external repositories:
+
+```json
+{
+  "uris": ["@rust-analyzer::InlayHints::render"]
+}
+```
+
+External contexts must be registered via the `context` tool:
+
+```json Register external context
+{
+  "tool": "context",
+  "action": "add",
+  "path": "/path/to/rust-analyzer",
+  "alias": "@rust-analyzer",
+  "read": true
+}
+```
+
+### Context Modes
+
+- **`read: true`**: Allows `read` operations (read-only access)
+- **`index: true`**: Allows `search` operations (index-only access)
+- **`write: true`**: Allows `edit` operations (full write access)
+
+<Warning>
+Attempting to read from an `index`-only context returns an error:
+```json
+{"error": "Context '@rust-analyzer' is linked in Index mode. File reads are prohibited."}
+```
+</Warning>
+
+## Verbosity Levels
+
+| Level | Returns | Use Case |
+|-------|---------|----------|
+| `0` | Outline (names, lines) | Quick symbol discovery, IDE navigation |
+| `1` | Full source | Code review, understanding implementation |
+| `2` | Source + graph | Impact analysis, refactoring planning |
+
+<Tip>
+Use verbosity `2` sparingly - it triggers graph traversal which adds 50-200ms latency.
+</Tip>
+
+## Shadow Workspace Reads
+
+When an active shadow session exists, `read` automatically serves content from the shadow workspace:
+
+```json
+// 1. Start session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Edit file
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "...", "action": "upsert"}
+
+// 3. Read returns EDITED version (not committed yet)
+{"tool": "read", "uris": ["src/lib.rs::foo"]}
+```
+
+This enables "read your writes" semantics within a transaction.
+
+## Error Handling
+
+```json Symbol not found
+{
+  "uri": "src/missing.rs::foo",
+  "error": "Symbol 'foo' not found in workspace"
+}
+```
+
+```json File not found
+{
+  "uri": "src/missing.rs",
+  "error": "File not found: src/missing.rs"
+}
+```
+
+```json External context not registered
+{
+  "uri": "@unknown::Foo",
+  "error": "Context alias '@unknown' not found in registry."
+}
+```
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="search" icon="magnifying-glass" href="/api/tools/search">
+    Find symbols to read
+  </Card>
+  <Card title="graph" icon="diagram-project" href="/api/tools/graph">
+    Explore dependencies
+  </Card>
+  <Card title="edit" icon="pen-to-square" href="/api/tools/edit">
+    Modify symbols
+  </Card>
+</CardGroup>

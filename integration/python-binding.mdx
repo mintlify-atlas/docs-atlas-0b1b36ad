@@ -1,0 +1,371 @@
+---
+title: "Python Binding"
+description: "Install and use CURD from Python environments"
+icon: "python"
+---
+
+## Overview
+
+The `curd-python` package provides Python bindings for CURD, enabling you to:
+
+- Install CURD via `pip` or `uv`
+- Run the CURD CLI from Python virtual environments
+- Use instant launchers like `uvx` for zero-install execution
+- Integrate CURD into Python-based automation workflows
+
+<Info>
+  `curd-python` is a **thin wrapper** around the native Rust binary. It doesn't reimplement CURD—it locates and spawns the optimized native CLI.
+</Info>
+
+## Installation
+
+### Via pip
+
+```bash
+pip install curd-python
+```
+
+### Via uv (recommended)
+
+```bash
+uv pip install curd-python
+```
+
+### Instant Execution (No Install)
+
+Run CURD directly without installing:
+
+```bash
+uvx --from curd-python curd --version
+uvx --from curd-python curd search handle_connection
+```
+
+<Tip>
+  `uvx` automatically manages isolated environments. Perfect for CI/CD or quick one-off commands.
+</Tip>
+
+## Usage
+
+Once installed, the `curd` command is available in your Python environment:
+
+```bash
+# Activate your virtual environment
+source .venv/bin/activate
+
+# Run CURD commands
+curd doctor .
+curd search alpha
+curd workspace begin
+curd edit src/lib.rs::alpha --code "pub fn alpha() {}"
+curd workspace commit
+```
+
+## How It Works
+
+The Python binding implements a **binary location strategy**:
+
+<Steps>
+  <Step title="Check Local Build">
+    Looks for `../../target/release/curd` (monorepo development mode)
+  </Step>
+  
+  <Step title="Check PATH">
+    Falls back to `curd` in system PATH
+  </Step>
+  
+  <Step title="Error on Missing">
+    If neither exists, displays a clear error message
+  </Step>
+</Steps>
+
+### Source Code
+
+The wrapper is implemented in `curd-python/src/curd_python/cli.py`:
+
+```python
+import os
+import sys
+import subprocess
+import shutil
+
+def main():
+    """
+    CURD CLI Wrapper for PyPI distributions.
+    Routes arguments to the native Rust CLI binary.
+    """
+    args = sys.argv[1:]
+    
+    # Attempt to locate the native binary
+    local_binary = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../target/release/curd")
+    )
+    
+    if os.path.exists(local_binary):
+        command = local_binary
+    else:
+        command = shutil.which("curd")
+        if not command:
+            print("Error: Native `curd` binary not found in PATH.", 
+                  file=sys.stderr)
+            print("Please ensure CURD is installed correctly.", 
+                  file=sys.stderr)
+            sys.exit(1)
+
+    try:
+        result = subprocess.run([command] + args)
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        sys.exit(130)
+```
+
+<Note>
+  The wrapper preserves all CLI behavior, including stdin/stdout streaming for MCP mode.
+</Note>
+
+## Python Integration Examples
+
+### Subprocess Invocation
+
+```python
+import subprocess
+import json
+
+def curd_search(query: str, mode: str = "symbol"):
+    """Execute CURD search and return parsed results."""
+    result = subprocess.run(
+        ["curd", "search", query, "--mode", mode, "--json"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return json.loads(result.stdout)
+
+results = curd_search("handle_connection")
+for hit in results["results"]:
+    print(f"{hit['uri']}: {hit['line']}")
+```
+
+### MCP Client Integration
+
+```python
+import subprocess
+import json
+
+class CurdMCPClient:
+    def __init__(self, workspace_path: str):
+        self.process = subprocess.Popen(
+            ["curd", "run", workspace_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=0
+        )
+        self._request_id = 0
+    
+    def call_tool(self, tool: str, arguments: dict):
+        """Call a CURD tool via MCP protocol."""
+        self._request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool,
+                "arguments": arguments
+            }
+        }
+        
+        self.process.stdin.write(json.dumps(request) + "\n")
+        self.process.stdin.flush()
+        
+        response = json.loads(self.process.stdout.readline())
+        if "error" in response:
+            raise Exception(response["error"]["message"])
+        
+        return json.loads(response["result"]["content"][0]["text"])
+
+# Usage
+client = CurdMCPClient(".")
+results = client.call_tool("search", {
+    "query": "alpha",
+    "mode": "symbol",
+    "limit": 10
+})
+print(results)
+```
+
+### Batch Operations
+
+```python
+import subprocess
+
+def curd_batch_edit(edits: list[dict]):
+    """
+    Apply multiple edits in a single workspace session.
+    
+    Example:
+        edits = [
+            {"uri": "src/lib.rs::alpha", "code": "pub fn alpha() {}"},
+            {"uri": "src/lib.rs::beta", "code": "pub fn beta() {}"}
+        ]
+    """
+    subprocess.run(["curd", "workspace", "begin"], check=True)
+    
+    try:
+        for edit in edits:
+            subprocess.run(
+                ["curd", "edit", edit["uri"], "--code", edit["code"]],
+                check=True
+            )
+        subprocess.run(["curd", "workspace", "commit"], check=True)
+    except Exception:
+        subprocess.run(["curd", "workspace", "rollback"])
+        raise
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+```yaml
+name: CURD Integration Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+      
+      - name: Install CURD
+        run: pip install curd-python
+      
+      - name: Run CURD Doctor
+        run: curd doctor .
+      
+      - name: Semantic Search Test
+        run: |
+          curd search main --mode symbol --limit 5
+```
+
+### GitLab CI
+
+```yaml
+test:curd:
+  image: python:3.13
+  script:
+    - pip install curd-python
+    - curd doctor .
+    - curd search handle --mode symbol
+```
+
+## Development Setup
+
+Clone and install for local development:
+
+```bash
+git clone https://github.com/aerospeedsta/curd.git
+cd curd/curd-python
+
+# Build the native binary first
+cd .. && cargo build --release
+
+# Install Python binding in editable mode
+cd curd-python
+pip install -e .
+
+# Test
+curd --version
+```
+
+## Package Metadata
+
+**Package**: `curd-python`  
+**Version**: `0.7.1-beta`  
+**Python**: `>=3.13`  
+**Build Backend**: `maturin`
+
+From `pyproject.toml`:
+
+```toml
+[project]
+name = "curd-python"
+version = "0.7.1-beta"
+description = "Python bindings for CURD"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+curd = "curd_python.cli:main"
+```
+
+<Warning>
+  This package requires the CURD native binary to be installed separately or built from source. The wrapper alone is not sufficient.
+</Warning>
+
+## Comparison with Native Installation
+
+| Method | Best For | Installation Time | Compatibility |
+|--------|----------|-------------------|---------------|
+| **Native OS Package** | Production use | Fast (~1-2s) | Platform-specific |
+| **`curd-python`** | Python projects | Medium (~5-10s) | Cross-platform |
+| **`uvx` (instant)** | CI/CD, one-offs | Instant | Cross-platform |
+
+## Troubleshooting
+
+### "Binary not found in PATH"
+
+**Cause**: The native CURD binary isn't installed or isn't in your PATH.
+
+**Solution**:
+```bash
+# Option 1: Install native binary via Homebrew
+brew tap aerospeedsta/curd && brew install curd
+
+# Option 2: Build from source
+git clone https://github.com/aerospeedsta/curd.git
+cd curd && cargo build --release
+export PATH="$PWD/target/release:$PATH"
+
+# Verify
+curd --version
+```
+
+### Import Errors
+
+**Cause**: Incorrect Python environment or package not installed.
+
+**Solution**:
+```bash
+# Check installation
+pip show curd-python
+
+# Reinstall
+pip install --force-reinstall curd-python
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="MCP Server" href="/integration/mcp-server" icon="plug">
+    Connect to CURD via MCP protocol
+  </Card>
+  
+  <Card title="Node.js Binding" href="/integration/nodejs-binding" icon="node-js">
+    Use CURD from JavaScript/TypeScript
+  </Card>
+  
+  <Card title="Docker" href="/integration/docker" icon="docker">
+    Run CURD in containers
+  </Card>
+  
+  <Card title="CLI Reference" href="/commands/search" icon="terminal">
+    Complete CLI command documentation
+  </Card>
+</CardGroup>

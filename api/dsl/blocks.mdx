@@ -1,0 +1,344 @@
+---
+title: 'Blocks'
+description: 'Control flow blocks: sequence, atomic, and abort'
+---
+
+## Block Types
+
+Blocks group statements and control execution flow. CURD DSL supports three block types:
+
+1. **sequence** - Execute statements in order
+2. **atomic** - All-or-nothing transaction semantics
+3. **abort** - Early termination with cleanup
+
+<Note>
+  `parallel` is parsed but currently rejected at compile/execute time until the runtime has honest parallel lowering.
+</Note>
+
+## Sequence Blocks
+
+Sequence blocks execute statements in order, continuing even if individual steps fail (unless configured otherwise).
+
+### Syntax
+
+```curd
+sequence {
+  <statement_1>
+  <statement_2>
+  ...
+  <statement_n>
+}
+```
+
+### Example
+
+```curd
+arg module: string
+
+sequence {
+  # Read current implementation
+  read uri="src/" + $module + ".rs::validate"
+  
+  # Update the function
+  edit uri="src/" + $module + ".rs::validate" action="upsert" code=$patch
+  
+  # Verify the change
+  verify_impact strict=true
+  
+  # Check downstream callers
+  search query="validate" scope="function"
+}
+```
+
+### Behavior
+
+- Statements execute in declaration order
+- By default, continues to next statement even if current one fails
+- Can be configured with retry and timeout policies
+- Useful for workflows where some steps are optional or best-effort
+
+### When to Use
+
+Use `sequence` when:
+
+- Steps should happen in order
+- Later steps don't strictly depend on earlier successes
+- You want to collect results from multiple operations
+- Workflow should be resilient to individual step failures
+
+## Atomic Blocks
+
+Atomic blocks provide transaction semantics: either all statements succeed or none take effect.
+
+### Syntax
+
+```curd
+atomic {
+  <statement_1>
+  <statement_2>
+  ...
+  <statement_n>
+}
+```
+
+### Example
+
+```curd
+use session required
+
+let auth_patch = """
+pub fn validate(token: &str) -> bool {
+    !token.is_empty()
+}
+"""
+
+let handler_patch = """
+pub fn handle_request(token: &str) -> Result<()> {
+    if !validate(token) {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+"""
+
+atomic {
+  # Both edits must succeed or neither takes effect
+  edit uri="src/auth.rs::validate" action="upsert" code=$auth_patch
+  edit uri="src/handler.rs::handle_request" action="upsert" code=$handler_patch
+  verify_impact strict=true
+}
+```
+
+### Behavior
+
+- All statements must succeed for the block to succeed
+- If any statement fails, all changes are rolled back
+- Leverages CURD's shadow workspace for transactional semantics
+- Changes are atomic within the block boundary
+
+<Warning>
+  Atomic blocks require an active workspace session. Always wrap execution in `curd workspace begin` / `commit` / `rollback`.
+</Warning>
+
+### When to Use
+
+Use `atomic` when:
+
+- Changes are interdependent
+- Partial execution would leave code in an inconsistent state
+- You need all-or-nothing guarantees
+- Multiple edits form a logical unit of work
+
+### Example: Coordinated Refactoring
+
+```curd
+# explain: rename function across module boundaries
+# risk: function is called from multiple modules
+
+use session required
+
+let new_impl = """
+pub fn authenticate_user(token: &str) -> Result<User> {
+    // New implementation
+}
+"""
+
+atomic {
+  # Rename in definition module
+  edit uri="src/auth.rs::validate" action="delete"
+  edit uri="src/auth.rs" action="insert" code=$new_impl
+  
+  # Update all call sites
+  edit uri="src/api.rs" action="replace" pattern="validate(" replacement="authenticate_user("
+  edit uri="src/handler.rs" action="replace" pattern="validate(" replacement="authenticate_user("
+  
+  # Verify graph consistency
+  verify_impact strict=true
+}
+```
+
+## Abort Blocks
+
+Abort blocks provide early termination with cleanup semantics. When a condition is met, execution stops and cleanup statements run.
+
+### Syntax
+
+```curd
+abort {
+  <statement_1>
+  <statement_2>
+  ...
+  <abort_condition>
+  ...
+}
+```
+
+### Example
+
+```curd
+arg max_impact_score: float = 0.8
+
+abort {
+  # Analyze proposed change
+  analyze uri="src/auth.rs::validate" depth=3
+  
+  # If impact too high, abort with cleanup
+  # (abort condition syntax varies by implementation)
+  
+  # If we continue, apply the change
+  edit uri="src/auth.rs::validate" action="upsert" code=$patch
+  verify_impact strict=false
+}
+```
+
+### Behavior
+
+- Executes statements until abort condition triggers
+- Performs cleanup before terminating
+- Returns error status to caller
+- Useful for preflight checks and validation workflows
+
+### When to Use
+
+Use `abort` when:
+
+- Early validation gates should prevent later expensive operations
+- Cleanup is needed before exiting on error
+- You want explicit error boundaries
+- Preflight checks determine if workflow should proceed
+
+## Nesting Blocks
+
+Blocks can be nested to create complex control flow:
+
+```curd
+use session required
+
+sequence {
+  # Preflight checks
+  read uri="src/auth.rs::validate"
+  
+  # Atomic update
+  atomic {
+    edit uri="src/auth.rs::validate" action="upsert" code=$auth_patch
+    edit uri="src/handler.rs::handle" action="upsert" code=$handler_patch
+  }
+  
+  # Post-update verification (outside atomic boundary)
+  verify_impact strict=true
+  search query="validate" scope="function"
+}
+```
+
+## Parallel Blocks (Future)
+
+<Warning>
+  `parallel` blocks are currently parsed but **rejected at compile and execute time**. This feature is reserved until the runtime supports honest parallel lowering.
+</Warning>
+
+Future syntax (not yet supported):
+
+```curd
+# This will fail at compile time
+parallel {
+  read uri="src/module_a.rs"
+  read uri="src/module_b.rs"
+  read uri="src/module_c.rs"
+}
+```
+
+## Block Comparison
+
+<ResponseField name="sequence">
+  Ordered execution, continues on failure
+  
+  **Best for**: Multi-step workflows, data collection, best-effort operations
+</ResponseField>
+
+<ResponseField name="atomic">
+  All-or-nothing transaction semantics
+  
+  **Best for**: Interdependent changes, refactoring, maintaining consistency
+</ResponseField>
+
+<ResponseField name="abort">
+  Early termination with cleanup
+  
+  **Best for**: Validation gates, preflight checks, error boundaries
+</ResponseField>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use atomic for coordinated changes">
+    When multiple edits must succeed together, wrap them in `atomic` blocks to ensure consistency.
+  </Accordion>
+  
+  <Accordion title="Keep blocks focused">
+    Each block should represent a single logical phase or transaction. Nest blocks for complex workflows.
+  </Accordion>
+  
+  <Accordion title="Document block intent">
+    Use explainability comments to explain why a block boundary exists and what guarantees it provides.
+  </Accordion>
+  
+  <Accordion title="Test abort paths">
+    Verify that abort blocks properly clean up and report errors when conditions trigger.
+  </Accordion>
+  
+  <Accordion title="Avoid over-nesting">
+    Deep nesting makes scripts harder to read. Consider breaking complex workflows into separate scripts.
+  </Accordion>
+</AccordionGroup>
+
+## Complete Example
+
+```curd
+# explain: safely migrate authentication logic
+# why: moving to token-based auth from session-based
+# risk: breaks existing auth flow if not atomic
+# review: security team
+
+arg dry_run: bool = false
+
+use session required
+use profile default
+
+let token_auth = """
+pub fn validate_token(token: &str) -> Result<User> {
+    // Token validation logic
+}
+"""
+
+let handler_update = """
+pub fn authenticate(req: &Request) -> Result<User> {
+    let token = req.header("Authorization")?;
+    validate_token(token)
+}
+"""
+
+sequence {
+  # Phase 1: Analysis
+  read uri="src/auth.rs::validate"
+  analyze uri="src/auth.rs::validate" depth=2
+  
+  # Phase 2: Atomic migration
+  atomic {
+    # Add new token validation
+    edit uri="src/auth.rs" action="insert" code=$token_auth
+    
+    # Update handler
+    edit uri="src/handler.rs::authenticate" action="upsert" code=$handler_update
+    
+    # Remove old session-based code
+    edit uri="src/auth.rs::validate_session" action="delete"
+    
+    # Verify consistency
+    verify_impact strict=true
+  }
+  
+  # Phase 3: Post-migration checks (outside atomic boundary)
+  search query="validate_token" scope="function"
+  test pattern="auth_*"
+}
+```

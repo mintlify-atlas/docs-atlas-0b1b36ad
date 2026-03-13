@@ -1,0 +1,755 @@
+---
+title: Troubleshooting
+description: Common issues, diagnostic tools, and solutions for CURD CLI problems
+---
+
+## Diagnostic Tools
+
+CURD provides built-in tools to diagnose configuration, indexing, and runtime issues.
+
+### `curd doctor`
+
+Run comprehensive health checks on your workspace:
+
+```bash
+curd doctor
+```
+
+**Output includes:**
+- Workspace scan statistics (file count, scan time)
+- Index build performance and quality metrics
+- Symbol inventory (symbol count, density)
+- Configuration validation errors
+- Coverage and parity checks
+
+<Accordion title="Example doctor output">
+```json
+{
+  "status": "ok",
+  "workspace_root": "/workspace/my-project",
+  "scan": {
+    "files_found": 1247,
+    "scan_ms": 152
+  },
+  "index_probe": {
+    "wall_ms": 3421,
+    "stats": {
+      "total_ms": 3421,
+      "files_parsed": 1247,
+      "files_skipped_large": 3,
+      "files_parse_failed": 2,
+      "files_no_symbols": 87,
+      "symbols_found": 45632
+    }
+  },
+  "findings": [
+    {
+      "severity": "warning",
+      "code": "parse_failures",
+      "message": "2 files failed to parse. Review syntax errors."
+    }
+  ],
+  "human_summary": "Indexed 1247 files with 45632 symbols in 3.4s. Minor issues detected."
+}
+```
+</Accordion>
+
+### Doctor Profiles
+
+Use pre-configured health check profiles:
+
+```bash
+# Strict checks for CI/CD
+curd doctor --profile ci_strict
+
+# Lenient checks for development
+curd doctor --profile dev_lenient
+
+# Performance profiling
+curd doctor --profile performance
+```
+
+**Available profiles:**
+- `dev_lenient`: Allows minor parse failures, low symbol density
+- `ci_strict`: Fails on any parse errors, requires high coverage
+- `performance`: Focuses on indexing speed and resource usage
+
+### Custom Thresholds
+
+Override default thresholds via CLI:
+
+```bash
+curd doctor \
+  --max-total-ms 5000 \
+  --max-parse-fail 0 \
+  --min-symbol-count 10000 \
+  --min-coverage-ratio 0.95
+```
+
+Or configure in `settings.toml`:
+
+```toml
+[doctor]
+profile = "ci_strict"
+max_total_ms = 5000
+max_parse_fail = 0
+min_symbol_count = 10000
+min_coverage_ratio = 0.95
+```
+
+## Common Issues
+
+### Index and Search Problems
+
+#### "No symbols found" or empty search results
+
+**Symptoms:**
+```bash
+curd search "MyFunction"
+# No results found
+```
+
+**Diagnosis:**
+```bash
+curd doctor
+# Check "files_no_symbols" and "symbols_found" in output
+```
+
+**Causes:**
+1. Index is stale or not built
+2. Files are too large (skipped by default if > 1MB)
+3. Language parser is missing or failed
+4. Search query syntax is incorrect
+
+**Solutions:**
+
+<Steps>
+  <Step title="Rebuild the index">
+    ```bash
+    curd search --rebuild-index
+    ```
+  </Step>
+  
+  <Step title="Increase file size limit">
+    ```toml
+    # settings.toml
+    [index]
+    max_file_size = 5242880  # 5MB
+    ```
+  </Step>
+  
+  <Step title="Check parser support">
+    ```bash
+    curd doctor
+    # Look for "files_parse_failed" in output
+    ```
+    
+    If your language is unsupported, consider [writing a language plugin](/extensions/language-plugins).
+  </Step>
+  
+  <Step title="Verify query syntax">
+    Use exact symbol names or wildcards:
+    ```bash
+    curd search "MyFunction"      # Exact match
+    curd search "MyFunc*"         # Wildcard
+    curd search "my_function"     # Case-insensitive
+    ```
+  </Step>
+</Steps>
+
+#### "Index build is too slow"
+
+**Symptoms:**
+```bash
+curd doctor
+# "wall_ms": 45000  (45 seconds)
+```
+
+**Causes:**
+- Sequential parsing (default for safety)
+- Large number of files
+- Slow disk I/O
+
+**Solutions:**
+
+<Tabs>
+  <Tab title="Parallel Indexing">
+    ```toml
+    # settings.toml
+    [index]
+    execution = "parallel"
+    chunk_size = 100  # Files per worker
+    ```
+    
+    <Warning>
+      Parallel indexing requires sufficient RAM. Monitor memory usage with `htop` during builds.
+    </Warning>
+  </Tab>
+  
+  <Tab title="Exclude Large Directories">
+    ```
+    # .curdignore
+    node_modules/
+    target/
+    vendor/
+    build/
+    dist/
+    ```
+  </Tab>
+  
+  <Tab title="Incremental Indexing">
+    CURD automatically indexes only changed files. Ensure `.curd/search_index.db` is preserved:
+    
+    ```bash
+    # Don't delete the index unnecessarily
+    curd search "query"  # Uses cached index if available
+    ```
+  </Tab>
+</Tabs>
+
+### Transaction and Workspace Errors
+
+#### "Workspace is locked in READ-ONLY mode"
+
+**Symptoms:**
+```json
+{
+  "error": "Cannot execute tool 'edit': Workspace is locked in READ-ONLY mode by another active transaction."
+}
+```
+
+**Diagnosis:**
+```bash
+cat .curd/SESSION_LOCK
+# 12345 (PID of locking process)
+
+ps aux | grep 12345
+# Check if process is actually running
+```
+
+**Solutions:**
+
+<AccordionGroup>
+  <Accordion title="Wait for the other session to complete">
+    If another developer or CI job is running, wait for it to finish:
+    
+    ```bash
+    watch -n 5 "cat .curd/SESSION_LOCK 2>/dev/null || echo 'Lock released'"
+    ```
+  </Accordion>
+  
+  <Accordion title="Remove stale lock">
+    If the locking process is dead:
+    
+    ```bash
+    rm .curd/SESSION_LOCK
+    curd workspace begin
+    ```
+    
+    CURD also auto-detects stale locks on Linux/macOS (not Windows).
+  </Accordion>
+  
+  <Accordion title="Use a separate state directory">
+    If you need to work in parallel:
+    
+    ```bash
+    export CURD_STATE_DIR=.curd-dev-$(whoami)
+    curd workspace begin
+    ```
+  </Accordion>
+</AccordionGroup>
+
+#### "TRANS_BARRIER: Cannot execute hazardous tool"
+
+**Symptoms:**
+```json
+{
+  "error": "TRANS_BARRIER: Cannot execute hazardous tool 'edit': No active transaction. All writes must be performed within a CURD workspace transaction per AGENTS.md safety rules. Run workspace(action: 'begin') first."
+}
+```
+
+**Cause:** `edit`, `mutate`, `manage_file`, or `shell` called without an active transaction.
+
+**Solution:**
+```bash
+curd workspace begin
+curd edit --uri src/main.rs::main --body "new code"
+curd workspace commit
+```
+
+Disable enforcement (not recommended):
+
+```toml
+# settings.toml
+[edit]
+enforce_transactional = false
+```
+
+#### "Conflict detected during commit"
+
+**Symptoms:**
+```
+Error: Conflict detected in src/auth.rs
+Base hash: abc123
+Disk hash: def456
+Attempting three-way merge...
+Merge failed. Manual resolution required.
+```
+
+**Cause:** File was modified outside the transaction (e.g., by Git, another editor, or concurrent CURD session).
+
+**Solutions:**
+
+<Steps>
+  <Step title="View the diff">
+    ```bash
+    curd workspace diff
+    ```
+  </Step>
+  
+  <Step title="Rollback and retry">
+    ```bash
+    curd workspace rollback
+    # Re-apply changes after pulling latest
+    git pull
+    curd workspace begin
+    # ... re-do edits ...
+    curd workspace commit
+    ```
+  </Step>
+  
+  <Step title="Force commit (dangerous)">
+    <Warning>
+      This will overwrite disk changes. Only use if you're certain the shadow state is correct.
+    </Warning>
+    
+    ```bash
+    # Not available via CLI - requires MCP or REPL
+    # Use workspace rollback instead
+    ```
+  </Step>
+</Steps>
+
+### Sandbox and Shell Errors
+
+#### "bwrap: No such file or directory"
+
+**Symptoms:**
+```bash
+curd shell run "ls"
+# Error: bwrap: No such file or directory
+```
+
+**Cause:** Bubblewrap is not installed (Linux only).
+
+**Solution:**
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install bubblewrap
+```
+
+```bash Fedora/RHEL
+sudo dnf install bubblewrap
+```
+
+```bash Arch
+sudo pacman -S bubblewrap
+```
+
+</CodeGroup>
+
+Or use Docker mode:
+
+```toml
+# settings.toml
+[shell]
+docker_enabled = true
+docker_image = "ubuntu:22.04"
+```
+
+#### "sandbox-exec: Operation not permitted"
+
+**Symptoms (macOS):**
+```bash
+curd shell run "ls"
+# sandbox-exec: Operation not permitted
+```
+
+**Cause:** System Integrity Protection (SIP) is interfering.
+
+**Solution:** This is usually a false alarm. The command likely succeeded despite the warning. Verify:
+
+```bash
+curd shell run "echo 'test' > test.txt && cat test.txt"
+# If output is "test", sandboxing is working
+```
+
+If truly broken, use Docker mode (see above).
+
+#### "Command timeout exceeded 60s"
+
+**Symptoms:**
+```json
+{
+  "error": "TOOL_TIMEOUT: Execution of 'shell' exceeded the maximum allowed duration of 60s."
+}
+```
+
+**Cause:** Long-running command (e.g., `npm install`, `cargo build`).
+
+**Solutions:**
+
+<Tabs>
+  <Tab title="Increase Timeout">
+    Not configurable globally. Use `shell_status` to monitor long-running commands:
+    
+    ```bash
+    # Start command in background
+    curd shell run "npm install" --background
+    
+    # Poll status
+    curd shell status
+    ```
+  </Tab>
+  
+  <Tab title="Run Outside CURD">
+    For one-time setup commands, run directly:
+    
+    ```bash
+    npm install
+    # Then use CURD for incremental development
+    ```
+  </Tab>
+</Tabs>
+
+### Context Linking Issues
+
+#### "Failed to resolve path" when adding context
+
+**Symptoms:**
+```bash
+curd context add ../other-repo
+# Error: Failed to resolve path: No such file or directory
+```
+
+**Causes:**
+1. Path does not exist
+2. Relative path resolution issue
+3. Symlink target is broken
+
+**Solutions:**
+
+<Steps>
+  <Step title="Use absolute paths">
+    ```bash
+    curd context add /home/user/projects/other-repo --alias @other
+    ```
+  </Step>
+  
+  <Step title="Verify path exists">
+    ```bash
+    ls -la ../other-repo
+    # Should show directory contents
+    ```
+  </Step>
+  
+  <Step title="Resolve symlinks manually">
+    ```bash
+    realpath ../other-repo
+    # /home/user/projects/other-repo
+    
+    curd context add /home/user/projects/other-repo
+    ```
+  </Step>
+</Steps>
+
+#### "Cannot remove context" due to dangling edges
+
+**Symptoms:**
+```bash
+curd context remove @api
+# WARNING: `src/client.rs::connect` calls `@api::server::start`
+# Cannot remove context. Your primary workspace is actively calling
+# functions in this repository. Use --force to override.
+```
+
+**Cause:** Your workspace has function calls or imports referencing the linked context.
+
+**Solutions:**
+
+<AccordionGroup>
+  <Accordion title="Refactor code to remove dependencies">
+    ```bash
+    # Find all references
+    curd search "@api::"
+    
+    # Edit to remove or replace
+    curd workspace begin
+    curd edit --uri src/client.rs::connect --body "// new implementation"
+    curd workspace commit
+    
+    # Try removal again
+    curd context remove @api
+    ```
+  </Accordion>
+  
+  <Accordion title="Force removal (breaks references)">
+    <Warning>
+      This will leave dangling references in your graph. Subsequent graph queries may fail.
+    </Warning>
+    
+    ```bash
+    curd context remove @api --force
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Configuration Errors
+
+#### "Invalid settings.toml"
+
+**Symptoms:**
+```bash
+curd init
+# Error: Failed to parse settings.toml: missing field `mode` at line 5
+```
+
+**Solution:**
+
+Run validation:
+
+```bash
+curd doctor
+# Check "findings" for configuration errors
+```
+
+Common mistakes:
+
+<Tabs>
+  <Tab title="Missing Required Fields">
+    ```toml
+    # Bad
+    [index]
+    # Missing mode field
+    
+    # Good
+    [index]
+    mode = "full"
+    ```
+  </Tab>
+  
+  <Tab title="Invalid Enum Values">
+    ```toml
+    # Bad
+    [index]
+    mode = "fast"  # Not a valid mode
+    
+    # Good
+    [index]
+    mode = "full"  # Valid: full, indexed, lazy
+    ```
+  </Tab>
+  
+  <Tab title="Type Mismatches">
+    ```toml
+    # Bad
+    [index]
+    max_file_size = "1MB"  # Should be integer bytes
+    
+    # Good
+    [index]
+    max_file_size = 1048576  # 1MB in bytes
+    ```
+  </Tab>
+</Tabs>
+
+Reference: [Configuration Schema](/configuration/settings)
+
+## Performance Optimization
+
+### Slow Search Queries
+
+<Steps>
+  <Step title="Rebuild index in parallel mode">
+    ```toml
+    [index]
+    execution = "parallel"
+    ```
+  </Step>
+  
+  <Step title="Exclude irrelevant files">
+    ```
+    # .curdignore
+    test/
+    docs/
+    examples/
+    ```
+  </Step>
+  
+  <Step title="Use indexed mode for large repos">
+    ```toml
+    [index]
+    mode = "indexed"  # Skip large files
+    max_file_size = 524288  # 512KB
+    ```
+  </Step>
+</Steps>
+
+### High Memory Usage
+
+<Tabs>
+  <Tab title="Reduce Chunk Size">
+    ```toml
+    [index]
+    chunk_size = 50  # Default: 100
+    ```
+  </Tab>
+  
+  <Tab title="Use Sequential Execution">
+    ```toml
+    [index]
+    execution = "sequential"
+    ```
+  </Tab>
+  
+  <Tab title="Monitor Shadow Workspace">
+    ```bash
+    du -sh .curd/shadow/
+    # If > 1GB, consider rolling back unused transactions
+    curd workspace rollback
+    ```
+  </Tab>
+</Tabs>
+
+### Slow Graph Queries
+
+<Steps>
+  <Step title="Pre-build graph index">
+    ```bash
+    curd graph --rebuild
+    ```
+  </Step>
+  
+  <Step title="Limit depth for large graphs">
+    ```bash
+    curd graph --from src/main.rs --max-depth 3
+    ```
+  </Step>
+  
+  <Step title="Cache context indexes">
+    Linked contexts are re-indexed on demand. Pre-build:
+    
+    ```bash
+    cd /external/context
+    curd search --rebuild-index
+    ```
+  </Step>
+</Steps>
+
+## Debugging Tools
+
+### Enable Verbose Logging
+
+```bash
+export RUST_LOG=curd=debug
+curd search "MyFunction"
+```
+
+**Log levels:**
+- `error`: Critical failures only
+- `warn`: Recoverable issues
+- `info`: High-level operations (default)
+- `debug`: Detailed execution traces
+- `trace`: Full internal state dumps
+
+### Inspect Transaction State
+
+```bash
+# View staged changes
+curd workspace diff
+
+# List staged files
+curd workspace status
+
+# View shadow workspace
+ls -la .curd/shadow/root_*/
+```
+
+### Export Doctor Report
+
+```bash
+curd doctor --report-out doctor-report.json
+cat doctor-report.json | jq '.findings'
+```
+
+### Audit History
+
+CURD logs all tool calls to `.curd/history.jsonl`:
+
+```bash
+# View recent operations
+tail -20 .curd/history.jsonl | jq -r '.tool_name'
+
+# Find failed operations
+jq 'select(.success == false)' .curd/history.jsonl
+```
+
+## Getting Help
+
+### Check Documentation
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand CURD's architecture and terminology
+  </Card>
+  <Card title="Tools Reference" icon="wrench" href="/api/tools/overview">
+    Detailed documentation for all MCP tools
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/settings">
+    Complete settings.toml reference
+  </Card>
+  <Card title="GitHub Issues" icon="github" href="https://github.com/curd-lang/curd">
+    Report bugs and request features
+  </Card>
+</CardGroup>
+
+### Community Support
+
+- **Discord**: Join the CURD community server
+- **GitHub Discussions**: Ask questions and share workflows
+- **Stack Overflow**: Tag questions with `curd-cli`
+
+### Collect Diagnostic Information
+
+When reporting issues, include:
+
+```bash
+# System info
+uname -a
+
+# CURD version
+curd --version
+
+# Doctor report
+curd doctor --report-out doctor.json
+
+# Configuration
+cat settings.toml
+
+# Recent logs (sanitize sensitive data!)
+tail -50 .curd/history.jsonl
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Doctor Tool" icon="stethoscope" href="/commands/test">
+    Deep dive into diagnostic capabilities
+  </Card>
+  <Card title="Sandboxing" icon="shield" href="/advanced/sandboxing">
+    Understand security isolation mechanisms
+  </Card>
+</CardGroup>

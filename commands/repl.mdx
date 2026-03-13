@@ -1,0 +1,432 @@
+---
+title: 'curd repl'
+description: 'Interactive REPL for semantic code exploration'
+---
+
+## Overview
+
+The `repl` command starts an interactive Read-Eval-Print Loop for exploring your codebase semantically. Execute searches, reads, edits, and graph traversals in a conversational interface with persistent session state.
+
+## Syntax
+
+```bash
+curd repl [ROOT]
+```
+
+**Alias:** `rpl`
+
+## Parameters
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+## Behavior
+
+- Provides interactive prompt for CURD commands
+- Maintains session state across commands
+- Supports all core operations: search, read, edit, graph, etc.
+- Auto-completes URIs and symbol names
+- Preserves command history (up/down arrows)
+- Integrates with shadow transactions
+
+## Starting the REPL
+
+```bash
+# Start in current workspace
+curd repl
+
+# Start in specific workspace
+curd repl ~/projects/myapp
+```
+
+**Output:**
+```
+CURD Interactive REPL v0.7.0
+Workspace: /home/user/projects/myapp
+Type 'help' for available commands, 'exit' to quit.
+
+curd>
+```
+
+## Available Commands
+
+### Core Operations
+
+```bash
+# Search for symbols
+curd> search parse
+curd> search Config --kind class
+
+# Read files and symbols
+curd> read src/main.rs
+curd> read src/api.rs::handle_request
+
+# Explore dependencies
+curd> graph src/main.rs::main --depth 2
+
+# Edit symbols (requires session)
+curd> session begin
+curd> edit src/lib.rs::foo --action upsert --code 'fn foo() { }'
+curd> session commit
+```
+
+### Session Management
+
+```bash
+# Start transaction
+curd> session begin
+
+# Review changes
+curd> session review
+
+# Commit or rollback
+curd> session commit
+curd> session rollback
+```
+
+### Workspace Operations
+
+```bash
+# Check status
+curd> status
+
+# Run tests
+curd> test all
+curd> test nodes --verbose
+
+# Build
+curd> build
+curd> build test
+```
+
+### Meta Commands
+
+```bash
+# Get help
+curd> help
+
+# View history
+curd> history
+
+# Clear screen
+curd> clear
+
+# Exit REPL
+curd> exit
+curd> quit
+```
+
+## Interactive Features
+
+### Command History
+
+Use arrow keys to navigate command history:
+
+```bash
+curd> search handler
+curd> <UP>    # Recalls: search handler
+curd> <DOWN>  # Navigate forward
+```
+
+### Auto-Completion
+
+Tab completion for commands and URIs:
+
+```bash
+curd> sea<TAB>     # Completes to: search
+curd> read src/<TAB>  # Lists files in src/
+```
+
+### Multi-Line Input
+
+Use backslash for multi-line commands:
+
+```bash
+curd> edit src/lib.rs::function --action upsert \
+      --code 'fn function() { \
+        println!("Hello"); \
+      }'
+```
+
+### Variable Substitution
+
+Store and reuse values:
+
+```bash
+curd> $uri = "src/main.rs::main"
+curd> read $uri
+curd> graph $uri --depth 2
+```
+
+## Common Workflows
+
+### Exploration Workflow
+
+```bash
+curd> search authentication
+# Returns: src/auth.rs::authenticate_user
+
+curd> read src/auth.rs::authenticate_user
+# View implementation
+
+curd> graph src/auth.rs::authenticate_user --depth 2
+# See what it calls and who calls it
+```
+
+### Refactoring Workflow
+
+```bash
+curd> session begin
+
+curd> refactor rename src/api.rs::old_handler new_handler
+curd> edit src/api.rs::new_handler --action upsert --code '...'
+
+curd> session review
+# Check changes
+
+curd> test all
+# Verify integrity
+
+curd> session commit
+# Apply changes
+```
+
+### Debugging Workflow
+
+```bash
+curd> search buggy_function
+curd> read src/lib.rs::buggy_function
+
+curd> graph src/lib.rs::buggy_function
+# Find callers
+
+curd> session begin
+curd> edit src/lib.rs::buggy_function --action upsert --code '...'
+curd> session review
+curd> session commit
+```
+
+### Batch Operations
+
+```bash
+curd> session begin
+
+curd> for uri in src/deprecated.rs::*; do
+        edit $uri --action delete
+      done
+
+curd> session review
+curd> session commit
+```
+
+## REPL-Specific Features
+
+### Persistent Session
+
+The REPL maintains state across commands:
+
+```bash
+curd> session begin
+# Session is now active
+
+curd> edit src/main.rs::foo --action delete
+# Operates within the active session
+
+curd> status
+# Shows active shadow transaction
+
+curd> session commit
+# Session ends
+```
+
+### JSON Mode
+
+Toggle JSON output:
+
+```bash
+curd> json on
+curd> search parse
+{
+  "results": [...]
+}
+
+curd> json off
+```
+
+### Scripting Support
+
+Pipe commands into the REPL:
+
+```bash
+echo "search Config\nread src/config.rs::Config\nexit" | curd repl
+```
+
+### Error Recovery
+
+Errors don't exit the REPL:
+
+```bash
+curd> read nonexistent.rs
+Error: File not found: nonexistent.rs
+
+curd> # Still in REPL, can continue
+```
+
+## Advanced Usage
+
+### Chaining Commands
+
+```bash
+curd> search handler && read $(result.uri) && graph $(result.uri)
+```
+
+### Conditional Execution
+
+```bash
+curd> session begin
+curd> edit src/lib.rs::foo --action delete
+curd> if test all; then session commit; else session rollback; fi
+```
+
+### Looping Over Results
+
+```bash
+curd> search "test_" --kind function
+curd> for uri in $(result.*.uri); do read $uri; done
+```
+
+## Configuration
+
+Configure REPL behavior via environment variables:
+
+```bash
+# Set custom prompt
+export CURD_REPL_PROMPT=">> "
+
+# Enable verbose output
+export CURD_REPL_VERBOSE=1
+
+# Disable auto-completion
+export CURD_REPL_AUTOCOMPLETE=0
+
+curd repl
+```
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+C` | Cancel current input |
+| `Ctrl+D` | Exit REPL |
+| `Ctrl+L` | Clear screen |
+| `Ctrl+R` | Reverse history search |
+| `Ctrl+U` | Clear line |
+| `Up/Down` | Navigate history |
+| `Tab` | Auto-complete |
+
+## Examples
+
+<CodeGroup>
+
+```bash Exploration
+curd repl
+
+curd> search Router
+curd> read src/api.rs::Router
+curd> graph src/api.rs::Router --depth 1
+curd> exit
+```
+
+```bash Refactoring
+curd repl
+
+curd> session begin
+curd> refactor rename src/lib.rs::old_name new_name
+curd> test all
+curd> session commit
+curd> exit
+```
+
+```bash Batch Deletion
+curd repl
+
+curd> session begin
+curd> edit src/deprecated.rs::func1 --action delete
+curd> edit src/deprecated.rs::func2 --action delete
+curd> edit src/deprecated.rs::func3 --action delete
+curd> session review
+curd> session commit
+curd> exit
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="REPL doesn't start">
+    Ensure workspace is initialized:
+    ```bash
+    curd init
+    curd repl
+    ```
+  </Accordion>
+
+  <Accordion title="Commands not found">
+    Type `help` to see available commands:
+    ```bash
+    curd> help
+    ```
+    
+    Verify CURD CLI is in PATH:
+    ```bash
+    which curd
+    ```
+  </Accordion>
+
+  <Accordion title="Auto-completion not working">
+    Check terminal support:
+    ```bash
+    export TERM=xterm-256color
+    curd repl
+    ```
+  </Accordion>
+
+  <Accordion title="Session state lost">
+    Sessions are workspace-specific. Ensure you're in the same workspace:
+    ```bash
+    curd> status
+    # Check [Shadow Store: ACTIVE]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Scripting with REPL
+
+Create REPL scripts:
+
+```bash
+#!/bin/bash
+# explore.sh
+
+curd repl <<EOF
+search Config
+read src/config.rs::Config
+graph src/config.rs::Config --depth 2
+exit
+EOF
+```
+
+Run with:
+```bash
+chmod +x explore.sh
+./explore.sh
+```
+
+## See Also
+
+- [curd search](/commands/search) - Search symbols
+- [curd read](/commands/read) - Read source code
+- [curd session](/commands/session) - Manage transactions
+- [curd run](/workflows/script-lifecycle) - Execute scripts

@@ -1,0 +1,385 @@
+---
+title: 'graph'
+description: 'Dependency graph traversal and call graph analysis'
+---
+
+## Description
+
+The `graph` tool performs BFS traversal of the dependency graph to find callers and callees of specified symbols. It returns detailed edge metadata including confidence scores, edge types, and structural relationships.
+
+## Request Parameters
+
+<ParamField path="uris" type="array" required>
+  Array of symbol URIs to query. Format: `file::symbol` or just `symbol` (fuzzy matched).
+  
+  Examples:
+  - `["src/lib.rs::calculate"]`
+  - `["User", "calculate_score"]`
+  - `["@rust-analyzer::InlayHints"]` (external context)
+</ParamField>
+
+<ParamField path="direction" type="string">
+  Traversal direction:
+  - `up` - Find callers only
+  - `down` - Find callees only
+  - `both` - Both callers and callees (default)
+</ParamField>
+
+<ParamField path="depth" type="number">
+  Traversal depth (1-10). Default: `1`
+</ParamField>
+
+<ParamField path="up_depth" type="number">
+  Independent caller depth (overrides `direction` + `depth`)
+</ParamField>
+
+<ParamField path="down_depth" type="number">
+  Independent callee depth (overrides `direction` + `depth`)
+</ParamField>
+
+<ParamField path="min_confidence" type="number">
+  Filter edges by minimum confidence (0.0 - 1.0)
+</ParamField>
+
+<ParamField path="tiers" type="array">
+  Filter edges by tier. Valid values: `["semantic", "structural"]`
+</ParamField>
+
+<ParamField path="sources" type="array">
+  Filter edges by source. Examples:
+  - `["fallback:call_scan"]`
+  - `["fallback:stub_link"]`
+  - `["indexed"]`
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="results" type="array" required>
+  Array of graph query results (one per input URI)
+  
+  <Expandable title="Result Object Schema">
+    <ResponseField name="uri" type="string">
+      Original input URI
+    </ResponseField>
+    
+    <ResponseField name="function_id" type="string">
+      Resolved canonical symbol ID
+    </ResponseField>
+    
+    <ResponseField name="resolved" type="boolean">
+      Whether the URI was successfully resolved to a known symbol
+    </ResponseField>
+    
+    <ResponseField name="callers" type="array">
+      Array of direct caller symbol IDs
+    </ResponseField>
+    
+    <ResponseField name="callees" type="array">
+      Array of direct callee symbol IDs
+    </ResponseField>
+    
+    <ResponseField name="up_levels" type="array">
+      BFS levels of callers (array of arrays, one per depth level)
+    </ResponseField>
+    
+    <ResponseField name="down_levels" type="array">
+      BFS levels of callees (array of arrays, one per depth level)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Number of resolved URIs
+</ResponseField>
+
+<ResponseField name="nodes" type="array">
+  Metadata for all nodes in the graph closure
+  
+  <Expandable title="Node Schema">
+    <ResponseField name="id" type="string">
+      Symbol ID
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Symbol name
+    </ResponseField>
+    
+    <ResponseField name="kind" type="string">
+      Symbol kind (function, class, struct, etc.)
+    </ResponseField>
+    
+    <ResponseField name="role" type="string">
+      Symbol role (definition, stub, reference)
+    </ResponseField>
+    
+    <ResponseField name="file" type="string">
+      Relative file path
+    </ResponseField>
+    
+    <ResponseField name="start_line" type="number">
+      Starting line number
+    </ResponseField>
+    
+    <ResponseField name="end_line" type="number">
+      Ending line number
+    </ResponseField>
+    
+    <ResponseField name="alias" type="boolean">
+      Whether this is an alias/stub node
+    </ResponseField>
+    
+    <ResponseField name="fault_state" type="string | null">
+      UUID of associated fault (if poisoned)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="edges" type="array">
+  Simple edge list: `[["caller_id", "callee_id"], ...]`
+</ResponseField>
+
+<ResponseField name="typed_edges" type="array">
+  Typed edge list: `[["from", "to", "kind"], ...]`
+</ResponseField>
+
+<ResponseField name="detailed_edges" type="array">
+  Full edge metadata with confidence and evidence
+  
+  <Expandable title="Detailed Edge Schema">
+    <ResponseField name="from" type="string">
+      Source symbol ID
+    </ResponseField>
+    
+    <ResponseField name="to" type="string">
+      Target symbol ID
+    </ResponseField>
+    
+    <ResponseField name="kind" type="string">
+      Edge type: `calls`, `imports`, `contains`, `declares`, `owns_member`, `realizes`, `universal_link`, `universal_name`, `bridge`
+    </ResponseField>
+    
+    <ResponseField name="tier" type="string">
+      Edge tier: `semantic` or `structural`
+    </ResponseField>
+    
+    <ResponseField name="confidence" type="number">
+      Confidence score (0.0 - 1.0)
+    </ResponseField>
+    
+    <ResponseField name="source" type="string">
+      Edge source: `indexed`, `fallback:call_scan`, `fallback:stub_link`, etc.
+    </ResponseField>
+    
+    <ResponseField name="evidence" type="array">
+      Evidence tags supporting this edge
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="edge_summary" type="object">
+  Aggregate statistics about edges
+  
+  <Expandable>
+    <ResponseField name="by_kind" type="object">
+      Count of edges by kind
+    </ResponseField>
+    
+    <ResponseField name="by_tier" type="object">
+      Count of edges by tier
+    </ResponseField>
+    
+    <ResponseField name="by_source" type="object">
+      Count of edges by source
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="ffi_edges" type="array">
+  Cross-language bridge edges
+</ResponseField>
+
+<ResponseField name="ffi_edge_count" type="number">
+  Number of FFI/bridge edges
+</ResponseField>
+
+<ResponseField name="graph_origin" type="string">
+  Graph source: `indexed` (from cache) or `fallback` (computed fresh)
+</ResponseField>
+
+<ResponseField name="up_depth" type="number">
+  Actual caller traversal depth used
+</ResponseField>
+
+<ResponseField name="down_depth" type="number">
+  Actual callee traversal depth used
+</ResponseField>
+
+<ResponseField name="filters" type="object">
+  Applied filters
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json Basic Graph Query
+{
+  "uris": ["calculate_score"],
+  "direction": "both",
+  "depth": 2
+}
+```
+
+```json High-Confidence Edges Only
+{
+  "uris": ["src/lib.rs::parse_config"],
+  "direction": "up",
+  "depth": 3,
+  "min_confidence": 0.85
+}
+```
+
+```json Structural Edges Only
+{
+  "uris": ["User"],
+  "direction": "down",
+  "depth": 1,
+  "tiers": ["structural"]
+}
+```
+
+</CodeGroup>
+
+### Response Example
+
+```json
+{
+  "results": [
+    {
+      "uri": "calculate_score",
+      "function_id": "src/scoring.rs::calculate_score",
+      "resolved": true,
+      "callers": ["src/main.rs::process_input"],
+      "callees": ["src/utils.rs::normalize", "src/utils.rs::clamp"],
+      "up_levels": [["src/main.rs::process_input"]],
+      "down_levels": [["src/utils.rs::normalize", "src/utils.rs::clamp"]]
+    }
+  ],
+  "count": 1,
+  "nodes": [
+    {
+      "id": "src/scoring.rs::calculate_score",
+      "name": "calculate_score",
+      "kind": "function",
+      "role": "definition",
+      "file": "src/scoring.rs",
+      "start_line": 42,
+      "end_line": 58,
+      "alias": false,
+      "fault_state": null
+    }
+  ],
+  "edges": [
+    ["src/main.rs::process_input", "src/scoring.rs::calculate_score"],
+    ["src/scoring.rs::calculate_score", "src/utils.rs::normalize"]
+  ],
+  "detailed_edges": [
+    {
+      "from": "src/main.rs::process_input",
+      "to": "src/scoring.rs::calculate_score",
+      "kind": "calls",
+      "tier": "semantic",
+      "confidence": 0.78,
+      "source": "fallback:call_scan",
+      "evidence": ["fallback", "call_scan", "same_file", "matched_name"]
+    }
+  ],
+  "edge_summary": {
+    "by_kind": {"calls": 12, "imports": 3},
+    "by_tier": {"semantic": 10, "structural": 5},
+    "by_source": {"fallback:call_scan": 12, "indexed": 3}
+  },
+  "ffi_edges": [],
+  "ffi_edge_count": 0,
+  "graph_origin": "indexed",
+  "up_depth": 1,
+  "down_depth": 1
+}
+```
+
+## Edge Types
+
+### Semantic Edges (tier: "semantic")
+
+- **`calls`**: Function invocation (confidence: 0.35-0.95)
+- **`imports`**: Import/use statement (confidence: 0.60-0.94)
+- **`universal_link`**: Stub-to-definition link via explicit name (confidence: 0.90+)
+- **`universal_name`**: Stub-to-definition link via name matching (confidence: 0.70+)
+- **`bridge`**: Cross-language wrapper (e.g., `curd-node` → `curd-core`) (confidence: 0.90)
+
+### Structural Edges (tier: "structural")
+
+- **`contains`**: Nesting relationship (parent contains child symbol) (confidence: 0.90-0.98)
+- **`declares`**: Module declares symbol (confidence: 0.93-0.99)
+- **`owns_member`**: Class/struct owns method (confidence: 0.94-0.99)
+- **`realizes`**: Trait/interface implementation (confidence: 0.95)
+
+## Graph Caching
+
+The graph engine uses SQLite to cache computed edges:
+
+- **Cache key**: Symbol index state (file mtimes + content hashes)
+- **Cache invalidation**: Automatic on file mutations
+- **Cache hit**: `graph_origin: "indexed"` (instant response)
+- **Cache miss**: `graph_origin: "fallback"` (recomputes graph)
+
+<Tip>
+First graph query on a fresh codebase triggers full graph build (5-30 seconds). Subsequent queries are &lt;50ms.
+</Tip>
+
+## Fault Tracking
+
+The graph tracks semantic faults (test failures, runtime errors) and propagates them:
+
+```json Node with fault
+{
+  "id": "src/broken.rs::buggy_function",
+  "fault_state": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+Use the `workspace alerts` tool to view fault reports.
+
+## Performance Optimization
+
+### Filtering Strategies
+
+1. **Confidence filtering**: Remove low-confidence heuristic edges
+   ```json
+   {"min_confidence": 0.85}
+   ```
+
+2. **Tier filtering**: Focus on structural or semantic relationships
+   ```json
+   {"tiers": ["structural"]}
+   ```
+
+3. **Source filtering**: Exclude fallback heuristics
+   ```json
+   {"sources": ["indexed"]}
+   ```
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="search" icon="magnifying-glass" href="/api/tools/search">
+    Find symbols to query
+  </Card>
+  <Card title="read" icon="book-open" href="/api/tools/read">
+    Read source code for graph nodes
+  </Card>
+</CardGroup>

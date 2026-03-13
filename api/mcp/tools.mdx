@@ -1,0 +1,580 @@
+---
+title: "MCP Tools Reference"
+description: "Complete catalog of CURD tools accessible through Model Context Protocol"
+icon: "wrench"
+---
+
+## Overview
+
+CURD exposes 40+ tools through MCP's `tools/call` method, organized by capability:
+
+- **Code Intelligence**: search, read, contract, graph, diagram
+- **Code Modification**: edit, manage_file, refactor
+- **Execution**: shell, debug, build
+- **Session Management**: connection_open, connection_verify, workspace
+- **Planning**: execute_plan, execute_dsl, batch
+- **Extensibility**: plugin_tool, plugin_language, tool_group
+
+## Listing Available Tools
+
+<CodeGroup>
+```json Request
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {}
+}
+```
+
+```json Response
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Instant, SQLite-backed Semantic Graph search...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"},
+            "mode": {"type": "string", "enum": ["symbol", "text", "tiered"]},
+            "kind": {"type": "string", "enum": ["function", "class", "method"]},
+            "limit": {"type": "integer"}
+          },
+          "required": ["query", "mode"]
+        },
+        "x-curd": {
+          "capability": "read.search",
+          "operation": "read",
+          "lite_available": true,
+          "session_required": false
+        }
+      }
+      // ... 40+ more tools
+    ]
+  }
+}
+```
+</CodeGroup>
+
+### Tool Metadata (`x-curd` Extension)
+
+Each tool includes CURD-specific metadata:
+
+<ResponseField name="x-curd" type="object">
+  <Expandable title="properties">
+    <ResponseField name="capability" type="string">
+      Semantic capability identifier (e.g., `read.search`, `change.apply`, `exec.command`)
+    </ResponseField>
+    <ResponseField name="operation" type="string">
+      Canonical operation type: `read`, `write`, `execute`, `session`
+    </ResponseField>
+    <ResponseField name="lite_available" type="boolean">
+      Whether tool is available in Lite mode
+    </ResponseField>
+    <ResponseField name="session_required" type="boolean">
+      Whether tool requires an active workspace session
+    </ResponseField>
+    <ResponseField name="approval_requirement" type="string">
+      Policy gating: `user_or_policy`, `profile_or_policy`, `policy`, or null
+    </ResponseField>
+    <ResponseField name="workspace_actions" type="array">
+      For `workspace` tool: available actions (begin, commit, rollback, etc.)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Dynamic Tool Discovery
+
+Beyond built-in tools, CURD also lists:
+
+1. **Signed Tool Plugins** (`.curdt` packages) - Custom tools with sandboxed execution
+2. **Adopted MCP Tools** - Tools from external MCP servers via `tool_group`
+
+See `curd/src/mcp.rs:420-484` for dynamic tool entry generation.
+
+## Calling Tools
+
+### Request Format
+
+<CodeGroup>
+```json tools/call Request
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "query": "parse_ast",
+      "mode": "symbol",
+      "kind": "function",
+      "limit": 10
+    }
+  }
+}
+```
+
+```json tools/call Response
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\n  \"results\": [...]\n}"
+      }
+    ]
+  }
+}
+```
+</CodeGroup>
+
+<Info>
+Tool responses are always wrapped in `result.content[0].text` following MCP specification. The text contains JSON-serialized tool output.
+</Info>
+
+### Validation Pipeline
+
+Before execution, every tool call passes through:
+
+1. **Mode Check** - Lite mode rejects disabled tools (`curd/src/mcp.rs:507-515`)
+2. **Capability Validation** - Profile enforcement from `settings.toml` (`curd/src/validation.rs:16-39`)
+3. **Session Requirement** - Mutating tools require active workspace session
+4. **Policy Enforcement** - Blocklists, allowlists, and approval gates
+
+<Warning>
+Tools that mutate workspace state (`edit`, `manage_file`, `shell`) **REQUIRE** an active session:
+
+```json
+{"error": {"code": -32000, "message": "This tool requires an active workspace session. Call workspace(action: 'begin') first."}}
+```
+</Warning>
+
+## Core Tools by Category
+
+### Code Intelligence (Read-Only)
+
+<AccordionGroup>
+  <Accordion title="search" icon="magnifying-glass">
+    **Instant AST-backed semantic search**
+    
+    ```json
+    {
+      "name": "search",
+      "arguments": {
+        "query": "http_handler",
+        "mode": "symbol",  // symbol | text | tiered
+        "kind": "function",  // optional: function | class | method
+        "limit": 20
+      }
+    }
+    ```
+    
+    - **Symbol mode**: Tree-sitter AST search (sub-10ms on 200k file repos)
+    - **Text mode**: Literal grep with line numbers
+    - **Tiered mode**: Hybrid semantic + text search
+    
+    <Info>CRITICAL: Agents MUST use this instead of `grep`/`find` for deterministic results. See `curd/src/mcp.rs:619-631`</Info>
+  </Accordion>
+
+  <Accordion title="read" icon="book-open">
+    **Read files/functions/classes by URI**
+    
+    ```json
+    {
+      "name": "read",
+      "arguments": {
+        "uris": [
+          "src/main.rs",
+          "src/parser.rs::parse_ast"
+        ],
+        "verbosity": 1  // 0=outline, 1=full source
+      }
+    }
+    ```
+    
+    - Supports batch reads (multiple URIs)
+    - Symbol-aware boundaries (never truncates mid-function)
+    - Faster than `cat`/`head` for symbol extraction
+  </Accordion>
+
+  <Accordion title="contract" icon="file-contract">
+    **Function/class contract summary**
+    
+    ```json
+    {
+      "name": "contract",
+      "arguments": {
+        "uri": "src/engine.rs::SearchEngine::search"
+      }
+    }
+    ```
+    
+    Returns:
+    - Input parameters with types
+    - Output type
+    - Side effects
+    - One-line semantic gist
+  </Accordion>
+
+  <Accordion title="graph" icon="diagram-project">
+    **Universal Semantic Linker queries**
+    
+    ```json
+    {
+      "name": "graph",
+      "arguments": {
+        "uris": ["src/engine.rs::search_symbols"],
+        "direction": "both",  // up | down | both
+        "depth": 3
+      }
+    }
+    ```
+    
+    - **up**: Who calls this?
+    - **down**: What does this call?
+    - **both**: Full dependency graph
+    
+    Cross-language aware (Rust `extern` → C++, TS `declare` → JS).
+  </Accordion>
+
+  <Accordion title="diagram" icon="sitemap">
+    **Generate Mermaid/ASCII call graphs**
+    
+    ```json
+    {
+      "name": "diagram",
+      "arguments": {
+        "uris": ["src/main.rs::main", "src/app.rs::run"]
+      }
+    }
+    ```
+    
+    Produces visual representations of call relationships for documentation.
+  </Accordion>
+</AccordionGroup>
+
+### Code Modification (Requires Session)
+
+<AccordionGroup>
+  <Accordion title="edit" icon="pen-to-square">
+    **AST-aware transactional editing**
+    
+    ```json
+    {
+      "name": "edit",
+      "arguments": {
+        "uri": "src/parser.rs::parse_expression",
+        "code": "fn parse_expression() -> Expr { ... }",
+        "action": "upsert",  // upsert | delete
+        "adaptation_justification": "Fix null pointer dereference in parse_expression"
+      }
+    }
+    ```
+    
+    - Operates in **shadow workspace** (`.curd/shadow/root`)
+    - Zero syntax errors (Tree-sitter validation)
+    - Automatic architectural changelog
+    
+    <Warning>Requires active session. Call `workspace(action: 'begin')` first.</Warning>
+  </Accordion>
+
+  <Accordion title="manage_file" icon="file">
+    **Safe file operations**
+    
+    ```json
+    {
+      "name": "manage_file",
+      "arguments": {
+        "path": "src/new_module.rs",
+        "action": "create",  // create | write | delete | rename
+        "destination": "src/renamed_module.rs"  // for rename
+      }
+    }
+    ```
+    
+    - Strictly workspace-bounded (cannot escape workspace root)
+    - Operates in shadow store
+    - Requires session
+  </Accordion>
+</AccordionGroup>
+
+### Session & Workspace Management
+
+<AccordionGroup>
+  <Accordion title="connection_open" icon="key">
+    **Request cryptographic challenge**
+    
+    ```json
+    {
+      "name": "connection_open",
+      "arguments": {
+        "pubkey_hex": "a1b2c3..."
+      }
+    }
+    ```
+    
+    Returns a nonce for Ed25519 signature. See [Session Management](/api/mcp/session-management).
+  </Accordion>
+
+  <Accordion title="connection_verify" icon="shield-check">
+    **Verify signature and receive token**
+    
+    ```json
+    {
+      "name": "connection_verify",
+      "arguments": {
+        "pubkey_hex": "a1b2c3...",
+        "signature_hex": "d4e5f6..."
+      }
+    }
+    ```
+    
+    Returns `connection_token` for use in subsequent calls.
+  </Accordion>
+
+  <Accordion title="workspace" icon="folder">
+    **Transaction control**
+    
+    ```json
+    {
+      "name": "workspace",
+      "arguments": {
+        "action": "begin",  // status | list | begin | diff | commit | rollback
+        "proposal_id": "uuid",  // required for commit
+        "allow_unapproved": false
+      }
+    }
+    ```
+    
+    Actions:
+    - `begin`: Start shadow workspace transaction
+    - `diff`: Show pending changes
+    - `commit`: Apply changes to workspace (requires proposal or override)
+    - `rollback`: Discard shadow changes
+    - `status`: Show transaction state
+  </Accordion>
+
+  <Accordion title="verify_impact" icon="clipboard-check">
+    **Pre-commit semantic audit**
+    
+    ```json
+    {
+      "name": "verify_impact",
+      "arguments": {
+        "connection_token": "...",
+        "strict": true
+      }
+    }
+    ```
+    
+    Returns cohesion analysis and broken-link detection.
+    
+    <Tip>ALWAYS run before `workspace(action: 'commit')` to prevent regressions.</Tip>
+  </Accordion>
+</AccordionGroup>
+
+### Execution
+
+<AccordionGroup>
+  <Accordion title="shell" icon="terminal">
+    **Sandboxed command execution**
+    
+    ```json
+    {
+      "name": "shell",
+      "arguments": {
+        "command": "curd build release",
+        "action": "execute",  // execute | status | terminate
+        "is_background": false,
+        "task_id": "uuid"  // for status/terminate
+      }
+    }
+    ```
+    
+    - Workspace-bounded execution
+    - Policy-enforced (`settings.toml` exec rules)
+    - Background tasks return `task_id` for polling
+    
+    <Info>Prefer `curd build <target>` over raw `cargo build` to capture semantic backtraces.</Info>
+  </Accordion>
+
+  <Accordion title="debug" icon="bug">
+    **DAP-based debugging sessions**
+    
+    ```json
+    {
+      "name": "debug",
+      "arguments": {
+        "action": "execute",  // execute | start | send | recv | stop
+        "language": "python",
+        "snippet": "import sys\nprint(sys.version)"
+      }
+    }
+    ```
+    
+    Provides semantic, graph-mapped tracebacks instead of raw terminal output.
+  </Accordion>
+</AccordionGroup>
+
+### Planning & Orchestration
+
+<AccordionGroup>
+  <Accordion title="batch" icon="layer-group">
+    **Execute multiple tools as dependency DAG**
+    
+    ```json
+    {
+      "name": "batch",
+      "arguments": {
+        "tasks": [
+          {
+            "id": "search_parsers",
+            "tool": "search",
+            "args": {"query": "parse", "mode": "symbol"}
+          },
+          {
+            "id": "read_parser",
+            "tool": "read",
+            "args": {"uris": ["$search_parsers.results[0].uri"]},
+            "depends_on": ["search_parsers"]
+          }
+        ]
+      }
+    }
+    ```
+    
+    Supports `$variable` interpolation for dependency chaining.
+  </Accordion>
+
+  <Accordion title="execute_plan" icon="diagram-project">
+    **Execute compiled .curd scripts**
+    
+    ```json
+    {
+      "name": "execute_plan",
+      "arguments": {
+        "connection_token": "...",
+        "profile": "ci_strict",
+        "plan": {
+          "id": "uuid",
+          "nodes": [...]
+        }
+      }
+    }
+    ```
+    
+    Runs dependency-aware multi-step workflows. Requires session if any node mutates state.
+  </Accordion>
+
+  <Accordion title="execute_dsl" icon="code">
+    **Execute DSL node sequences**
+    
+    ```json
+    {
+      "name": "execute_dsl",
+      "arguments": {
+        "connection_token": "...",
+        "nodes": [
+          {"Call": {"tool": "search", "args": {...}}},
+          {"Assign": {"name": "results", "value": "$_"}}
+        ]
+      }
+    }
+    ```
+    
+    Supports `Call`, `Atomic`, `Abort`, `Assign` nodes with variable interpolation.
+  </Accordion>
+</AccordionGroup>
+
+### Extensibility
+
+<AccordionGroup>
+  <Accordion title="plugin_tool" icon="puzzle-piece">
+    **Manage signed tool plugins (.curdt)**
+    
+    ```json
+    {
+      "name": "plugin_tool",
+      "arguments": {
+        "action": "add",  // add | remove | list
+        "archive_path": "/path/to/tool.curdt",
+        "package_id": "com.example.tool"
+      }
+    }
+    ```
+    
+    Installed plugins appear in `tools/list` and can be called like built-in tools.
+  </Accordion>
+
+  <Accordion title="plugin_language" icon="language">
+    **Manage language plugins (.curdl)**
+    
+    ```json
+    {
+      "name": "plugin_language",
+      "arguments": {
+        "action": "add",
+        "archive_path": "/path/to/lang.curdl"
+      }
+    }
+    ```
+    
+    Extends parsing/LSP/debug support for additional languages.
+  </Accordion>
+
+  <Accordion title="tool_group" icon="server">
+    **Adopt external MCP servers**
+    
+    ```json
+    {
+      "name": "tool_group",
+      "arguments": {
+        "action": "add_mcp",
+        "group_id": "github",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "description": "GitHub MCP tools"
+      }
+    }
+    ```
+    
+    Exposes external MCP tools through CURD without rewriting the server.
+  </Accordion>
+</AccordionGroup>
+
+## Tool Routing
+
+All tool calls route through `dispatch_tool` in `curd-core`, ensuring consistent:
+
+- **Validation** - Runtime ceiling and profile checks
+- **Session enforcement** - Mutating tools require active workspace session
+- **Policy application** - Blocklists, allowlists, approval gates
+- **Telemetry** - Event emission for observability
+
+See implementation in `curd/src/router.rs:93-95` and `curd/src/mcp.rs:501-547`.
+
+## Complete Tool List
+
+For exhaustive tool definitions with schemas, see `curd/src/mcp.rs:548-1137`:
+
+- research, connection_open, connection_verify, session_open, session_verify
+- verify_impact, search, contract, read, edit, graph, workspace
+- diagram, shell, shell_status, terminate, manage_file, lsp, profile
+- debug, session, review_cycle, doc, plugin_tool, plugin_language
+- tool_group, plugin_trust, batch, benchmark, simulate, template
+- proposal, checkpoint, delegate, frontier, crawl, register_plan
+- execute_active_plan, execute_dsl, execute_plan, stamina, history
+
+<Card title="Get Tool Documentation" icon="book" href="/api/tools/overview">
+  Use the `doc` tool to get verbose documentation for any specific tool:
+  
+  ```json
+  {"name": "doc", "arguments": {"tool": "search"}}
+  ```
+</Card>

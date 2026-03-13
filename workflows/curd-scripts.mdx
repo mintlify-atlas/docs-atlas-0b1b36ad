@@ -1,0 +1,219 @@
+---
+title: ".curd Scripts"
+description: "Author workflow automation in the .curd source language"
+icon: "scroll"
+---
+
+CURD scripts (`.curd` files) are the human-friendly source format for workflow automation. They compile into plan artifacts for governed execution.
+
+## Why .curd scripts?
+
+`.curd` scripts separate authoring from execution:
+
+- **Easy to write**: Readable syntax for humans and agents
+- **Parameterized**: Define arguments for reusable workflows
+- **Explainable**: Structured comments capture intent and risk
+- **Graph-aware**: Compile-time impact analysis before execution
+
+<Note>
+Scripts are for **authoring**. Plan artifacts are for **execution**. This separation enables both developer velocity and governance.
+</Note>
+
+## Script syntax
+
+The `.curd` language supports the following constructs:
+
+### Profile and session
+
+```curd
+use profile ci_strict
+use session required
+```
+
+Specify the execution profile and whether a workspace session is required.
+
+### Arguments
+
+Define parameters to make scripts reusable:
+
+```curd
+arg target_uri: string
+arg strict: bool = true
+```
+
+Arguments can have default values. Pass them at compile time:
+
+```bash
+curd run compile fix.curd --target-uri src/lib.rs::alpha
+```
+
+### Variables
+
+Bind multiline strings or expressions:
+
+```curd
+let patch = """
+pub fn validate(token: &str) -> bool {
+    !token.is_empty()
+}
+"""
+```
+
+Reference variables using `$variable_name` in tool calls.
+
+### Tool calls
+
+Invoke CURD tools directly:
+
+```curd
+edit uri=$target_uri action="upsert" code=$patch
+verify_impact strict=$strict
+```
+
+### Control flow
+
+<AccordionGroup>
+  <Accordion title="sequence" icon="list-ol">
+    Execute steps in order, one after another:
+    
+    ```curd
+    sequence {
+      read uri="src/auth.rs"
+      edit uri="src/auth.rs::validate" action="upsert" code=$patch
+      verify_impact strict=true
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="atomic" icon="atom">
+    Execute all steps or roll back on failure:
+    
+    ```curd
+    atomic {
+      edit uri="src/auth.rs::validate" action="upsert" code=$patch
+      verify_impact strict=true
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="abort" icon="circle-stop">
+    Terminate execution with a message:
+    
+    ```curd
+    abort "Precondition failed: missing required session"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+The `parallel` keyword is parsed but **rejected** at compile/execute time until the runtime supports honest parallel lowering.
+</Warning>
+
+## Explainability comments
+
+Structured comments are preserved into compiled plan metadata:
+
+- `# explain:` - What the script does
+- `# why:` - Rationale for the approach
+- `# risk:` - Known risks or considerations
+- `# review:` - Review notes or requirements
+- `# tag:` - Classification tags
+
+### Example with explainability
+
+```curd
+# explain: tighten auth validation without changing the public entrypoint
+# why: downstream callers depend on the current function name
+# risk: auth and session modules are tightly connected
+# review: security team approval required
+# tag: security, refactoring
+
+use session required
+
+let patch = """
+pub fn validate(token: &str) -> bool {
+    !token.is_empty()
+}
+"""
+
+atomic {
+  edit uri="src/auth.rs::validate" action="upsert" code=$patch
+  verify_impact strict=true
+}
+```
+
+These comments become part of the plan artifact, making the compiled workflow self-documenting.
+
+## Complete example
+
+Here's a practical script that updates a function with safeguards:
+
+```curd
+# explain: refactor authentication logic for stricter validation
+# why: current implementation allows empty tokens
+# risk: tight coupling between auth and session modules
+
+use session required
+use profile default
+
+arg target_file: string = "src/auth.rs"
+arg function_name: string = "validate"
+
+let new_implementation = """
+pub fn validate(token: &str) -> Result<bool, AuthError> {
+    if token.is_empty() {
+        return Err(AuthError::EmptyToken);
+    }
+    Ok(token.len() >= 32)
+}
+"""
+
+sequence {
+  # Read current implementation for context
+  read uri=$target_file
+  
+  # Apply the change atomically with verification
+  atomic {
+    edit uri="${target_file}::${function_name}" action="upsert" code=$new_implementation
+    verify_impact strict=true
+  }
+}
+```
+
+## When to use .curd scripts
+
+Use `.curd` scripts when you want:
+
+<CardGroup cols={2}>
+  <Card title="Readable workflows" icon="book-open">
+    Human-friendly syntax beats raw JSON
+  </Card>
+  
+  <Card title="Reusable patterns" icon="recycle">
+    Parameterize with arguments for multiple uses
+  </Card>
+  
+  <Card title="Preflight checks" icon="plane-departure">
+    Graph-aware analysis before execution
+  </Card>
+  
+  <Card title="Agent authoring" icon="robot">
+    Easier for AI agents to generate and modify
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Plan artifacts" icon="file-contract" href="/workflows/plan-artifacts">
+    Learn about compiled execution contracts
+  </Card>
+  
+  <Card title="Script lifecycle" icon="rotate" href="/workflows/script-lifecycle">
+    Understand check, compile, edit, and execute
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/workflows/examples">
+    See real-world .curd script patterns
+  </Card>
+</CardGroup>

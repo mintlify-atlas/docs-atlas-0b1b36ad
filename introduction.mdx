@@ -1,0 +1,171 @@
+---
+title: Introduction
+description: CURD is a code-intelligence control plane for humans and agents
+---
+
+CURD is a code-intelligence control plane that helps you understand, mutate, and govern code with structural precision.
+
+## What is CURD?
+
+CURD provides a complete platform for safe, repeatable code workflows:
+
+- **Understand codebases structurally**, not just textually
+- **Mutate code safely** inside a shadow workspace
+- **Inspect graph impact** before committing changes
+- **Author repeatable workflows** in `.curd` source scripts
+- **Compile workflows** into governed plan artifacts
+
+## Use Cases
+
+You can use CURD as:
+
+<CardGroup cols={3}>
+  <Card title="Solo Coding Tool" icon="user">
+    A serious local coding assistant with safe mutation and structural understanding
+  </Card>
+  
+  <Card title="Agent Backend" icon="robot">
+    A supervised execution substrate for AI coding agents
+  </Card>
+  
+  <Card title="Enterprise Platform" icon="building">
+    An internal execution substrate for larger agentic systems
+  </Card>
+</CardGroup>
+
+## Core Capabilities
+
+### Code Intelligence Layer
+
+```bash
+curd search alpha
+curd read src/lib.rs::alpha
+curd graph src/lib.rs::alpha --direction both --depth 2
+```
+
+- **BM25/FTS-backed ranked search** for fast symbol discovery
+- **Tree-sitter powered parsing** for semantic understanding
+- **Graph-aware traversal** for impact analysis
+
+### Safe Mutation Layer
+
+```bash
+curd workspace begin
+curd edit src/lib.rs::alpha --code "pub fn alpha() {}"
+curd workspace diff
+curd workspace commit
+```
+
+- **Shadow workspace sessions** prevent direct file mutation
+- **Transaction model** with rollback capability
+- **Conflict-aware writeback** using three-way merge
+
+### Authoring Layer
+
+```curd
+# explain: tighten alpha implementation safely
+use session required
+
+let patch = """
+pub fn alpha() {
+    println!("updated");
+}
+"""
+
+atomic {
+  edit uri="src/lib.rs::alpha" action="upsert" code=$patch
+  verify_impact strict=true
+}
+```
+
+- **`.curd` source scripts** for workflow authoring
+- **Structured explainability** comments (`explain`, `why`, `risk`, `review`)
+- **Sequence and atomic** execution blocks
+
+### Governed Execution Layer
+
+```bash
+curd run check fix_alpha.curd
+curd run compile fix_alpha.curd
+curd plan edit <plan-id>
+curd run fix_alpha.curd
+```
+
+- **Compiled plan artifacts** preserve metadata for review
+- **Profile-based capability gating** in `settings.toml`
+- **Runtime ceilings** (`full` / `lite`) for environment control
+
+## Mental Model
+
+CURD has four important layers:
+
+<Steps>
+  <Step title="Code Intelligence">
+    Use `search`, `graph`, and `read` to understand the codebase structurally
+  </Step>
+  
+  <Step title="Safe Mutation">
+    Use `edit` and workspace sessions to make changes without risk
+  </Step>
+  
+  <Step title="Authoring">
+    Write `.curd` scripts to capture repeatable workflows
+  </Step>
+  
+  <Step title="Governed Execution">
+    Compile scripts into plan artifacts with profiles and policy enforcement
+  </Step>
+</Steps>
+
+<Info>
+If you only want local coding help, you can stay mostly in layers 1 and 2. If you want agentic workflows, layers 3 and 4 become important.
+</Info>
+
+## What Makes CURD Different
+
+Most coding workflows force you to choose between:
+
+- **Fast but sloppy** local automation
+- **Heavy but awkward** governed automation
+
+CURD tries to keep both layers:
+
+- The **source layer stays readable** (`.curd` scripts)
+- The **execution layer stays explicit** (compiled plans, profiles, sessions)
+
+## Product Surfaces
+
+CURD is the backend and control plane. The broader product direction includes:
+
+- **CURD** - The code-intelligence, session, plan, and execution substrate
+- **CURD-CODEX** (future) - An agent-facing coding surface with CURD as the backend
+- **WikiCURD** (future) - A human-first GPUI management surface for developers and PMs
+
+<Note>
+This split is intentional: CURD owns correctness, routing, sessions, and code intelligence, while agent surfaces use CURD instead of bypassing it.
+</Note>
+
+## What's New in v0.7.1
+
+Version `0.7.1-beta` is where CURD starts to feel like a real platform:
+
+- BM25/FTS-backed ranked search with safer indexing behavior
+- Stronger separation between `curd-core` and `curd`
+- Shared validation across CLI, REPL, and MCP
+- Profile-gated runtime behavior on top of `lite` / `full` ceilings
+- Real `.curd` authoring flow with `run check`, `run compile`, `plan edit`, `run`
+- Plugin hardening for `.curdl` and `.curdt`
+- Broader package-manager and launcher support
+- Much clearer local and public docs
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install CURD on your system
+  </Card>
+  
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Try your first CURD workflows
+  </Card>
+</CardGroup>

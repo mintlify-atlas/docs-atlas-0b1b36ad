@@ -1,0 +1,674 @@
+---
+title: "Profiles and Runtime"
+description: "Understanding CURD's runtime ceilings, profile-based capability gating, and execution modes"
+---
+
+CURD's execution model is governed by **runtime ceilings** and **profiles**. This two-layer system enables CURD to serve both indie developers and enterprise teams with the same binary.
+
+## The Two-Layer Model
+
+<Steps>
+  <Step title="Runtime Ceiling">
+    Defines the **outer boundary** of what the binary can do
+    
+    - `full`: Complete feature set
+    - `lite`: Restricted toolset
+  </Step>
+  
+  <Step title="Profile Capabilities">
+    Gates what the **specific actor** is allowed to do
+    
+    - Defined in `settings.toml`
+    - Maps operations to capability atoms
+    - Enforces session requirements
+  </Step>
+  
+  <Step title="Policy Enforcement">
+    Can still **deny requests** based on:
+    
+    - Blocklists and allowlists
+    - Resource constraints
+    - Custom validation rules
+  </Step>
+</Steps>
+
+<Info>
+**Effective Rule:**
+
+A request succeeds only if:
+1. **Runtime ceiling** permits the operation
+2. **Active profile** grants the required capability
+3. **Policy layer** does not deny the request
+</Info>
+
+## Runtime Ceilings
+
+Runtime ceilings are set via the `CURD_MODE` environment variable or `settings.toml`.
+
+<Tabs>
+  <Tab title="full">
+    ### Full Runtime Ceiling
+    
+    Exposes the complete CURD surface:
+    
+    <AccordionGroup>
+      <Accordion title="Code Intelligence" icon="magnifying-glass">
+        - `search` - BM25/FTS symbol search
+        - `read` - URI-based code reads
+        - `graph` - Dependency and call graphs
+      </Accordion>
+      
+      <Accordion title="Workspace" icon="folder">
+        - `begin` - Start transactions
+        - `status` - Check session state
+        - `diff` - Review changes
+        - `commit` - Apply mutations
+        - `rollback` - Discard changes
+        - `list` - List workspace files
+        - `dependencies` - Show dependency tree
+      </Accordion>
+      
+      <Accordion title="Mutation" icon="pen">
+        - `edit` - Symbol-level edits
+        - `mutate` - File-level mutations
+        - `refactor` - Structural refactoring
+        - `manage_file` - File operations
+      </Accordion>
+      
+      <Accordion title="Execution" icon="terminal">
+        - `shell` - Execute commands
+        - `build` - Build adapters (cargo, npm, etc.)
+        - `test` - Run semantic tests
+        - `profile` - Performance profiling
+      </Accordion>
+      
+      <Accordion title="Plans & Scripts" icon="file-code">
+        - `run` - Execute `.curd` scripts
+        - `plan` - Manage plan artifacts
+        - `execute_dsl` - Run DSL payloads
+        - `execute_plan` - Run compiled plans
+      </Accordion>
+      
+      <Accordion title="Plugins" icon="puzzle-piece">
+        - `plugin_install` - Install `.curdl`/`.curdt`
+        - `plugin_list` - List installed plugins
+        - `plugin_trust` - Manage trust levels
+        - `plugin_tool` - Execute plugin tools
+      </Accordion>
+    </AccordionGroup>
+  </Tab>
+  
+  <Tab title="lite">
+    ### Lite Runtime Ceiling
+    
+    Intentionally restrictive for safety-critical environments:
+    
+    <AccordionGroup>
+      <Accordion title="Allowed Operations" icon="check">
+        - `search` - Symbol search
+        - `read` - Code reads
+        - `edit` - Symbol edits (with session)
+        - `graph` - Dependency graphs
+        - `workspace` status/list/dependencies only
+      </Accordion>
+      
+      <Accordion title="Blocked Operations" icon="ban">
+        - Shell execution
+        - Build adapters
+        - Plugin management
+        - Direct file operations
+        - Plan compilation
+        - Workspace commit/rollback
+      </Accordion>
+    </AccordionGroup>
+    
+    <Warning>
+    `lite` mode is designed for environments where you need code intelligence but cannot risk arbitrary code execution.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Setting Runtime Ceiling
+
+<CodeGroup>
+```bash Environment Variable
+export CURD_MODE=full
+curd search alpha
+```
+
+```toml settings.toml
+[runtime]
+ceiling = "full"
+```
+
+```bash Verify Current Ceiling
+curd doctor .
+```
+</CodeGroup>
+
+## Profiles
+
+Profiles define **role-based capability sets** in `settings.toml`.
+
+### Example Profile Configuration
+
+```toml
+[runtime]
+ceiling = "full"
+
+[profiles.default]
+role = "human_developer"
+capabilities = [
+  "lookup", "traverse", "read",
+  "change.apply", "session.begin", "session.commit",
+  "exec.task", "plan.execute"
+]
+session_required_for_change = true
+promotion = "forbidden"
+
+[profiles.assist]
+role = "assist_agent"
+capabilities = ["lookup", "read"]
+session_required_for_change = true
+promotion = "forbidden"
+
+[profiles.supervised]
+role = "supervised_agent"
+capabilities = [
+  "lookup", "traverse", "read",
+  "change.apply", "session.begin", "session.verify",
+  "exec.task", "plan.execute", "review.run"
+]
+session_required_for_change = true
+promotion = "approval_required"
+
+[profiles.autonomous]
+role = "autonomous_agent"
+capabilities = [
+  "lookup", "traverse", "read",
+  "change.apply", "session.begin", "session.commit",
+  "exec.command", "plan.execute", "plugin.use"
+]
+session_required_for_change = true
+promotion = "automatic"
+
+[profiles.ci_strict]
+role = "ci_pipeline"
+capabilities = [
+  "lookup", "read", "traverse",
+  "exec.task", "review.run"
+]
+session_required_for_change = false
+promotion = "forbidden"
+```
+
+### Capability Atoms
+
+CURD maps tool calls to fine-grained capability atoms:
+
+<AccordionGroup>
+  <Accordion title="Lookup Capabilities" icon="magnifying-glass">
+    - `lookup` - Search for symbols
+    - `traverse` - Graph traversal
+    - `read` - Read source code
+  </Accordion>
+  
+  <Accordion title="Change Capabilities" icon="pen">
+    - `change.apply` - Make code edits
+    - `change.review` - Review changes
+    - `change.verify` - Verify impact
+  </Accordion>
+  
+  <Accordion title="Session Capabilities" icon="lock">
+    - `session.begin` - Start workspace sessions
+    - `session.verify` - Check session state
+    - `session.commit` - Commit changes
+    - `session.rollback` - Discard changes
+  </Accordion>
+  
+  <Accordion title="Execution Capabilities" icon="terminal">
+    - `exec.task` - Run build/test tasks (safe adapters)
+    - `exec.command` - Arbitrary shell commands
+    - `exec.sandbox` - Containerized execution
+  </Accordion>
+  
+  <Accordion title="Plan Capabilities" icon="file-code">
+    - `plan.execute` - Run compiled plans
+    - `plan.compile` - Compile `.curd` scripts
+    - `plan.edit` - Modify plan defaults
+  </Accordion>
+  
+  <Accordion title="Plugin Capabilities" icon="puzzle-piece">
+    - `plugin.use` - Use installed plugins
+    - `plugin.manage` - Install/remove plugins
+    - `plugin.trust` - Change trust levels
+  </Accordion>
+  
+  <Accordion title="Review Capabilities" icon="clipboard-check">
+    - `review.run` - Execute semantic tests
+    - `review.audit` - Generate audit reports
+  </Accordion>
+</AccordionGroup>
+
+### Tool-to-Capability Mapping
+
+<Tabs>
+  <Tab title="Code Intelligence">
+    | Tool | Capability |
+    |------|------------|
+    | `search` | `lookup` |
+    | `graph` | `traverse` |
+    | `read` | `read` |
+  </Tab>
+  
+  <Tab title="Mutation">
+    | Tool | Capability |
+    |------|------------|
+    | `edit` | `change.apply` |
+    | `mutate` | `change.apply` |
+    | `refactor` | `change.apply` |
+    | `manage_file` | `change.apply` |
+  </Tab>
+  
+  <Tab title="Workspace">
+    | Tool | Capability |
+    |------|------------|
+    | `workspace(begin)` | `session.begin` |
+    | `workspace(status)` | `session.verify` |
+    | `workspace(diff)` | `session.verify` |
+    | `workspace(commit)` | `session.commit` |
+    | `workspace(rollback)` | `session.rollback` |
+  </Tab>
+  
+  <Tab title="Execution">
+    | Tool | Capability |
+    |------|------------|
+    | `build` | `exec.task` |
+    | `test` | `exec.task` |
+    | `shell` (safe) | `exec.task` |
+    | `shell` (raw) | `exec.command` |
+  </Tab>
+</Tabs>
+
+### Profile Selection
+
+Profiles can be selected:
+
+<CodeGroup>
+```bash CLI Flag
+curd --profile supervised search alpha
+```
+
+```curd Script Directive
+use profile supervised
+
+sequence {
+  search query="validate"
+  read uri="src/auth.rs::validate"
+}
+```
+
+```json MCP Request
+{
+  "tool": "search",
+  "arguments": {
+    "query": "alpha",
+    "profile": "supervised"
+  }
+}
+```
+
+```toml Default Profile
+[runtime]
+default_profile = "supervised"
+```
+</CodeGroup>
+
+## Use Case: Profile Strategies
+
+<Tabs>
+  <Tab title="Indie Developer">
+    ### Local Solo Developer
+    
+    **Goal**: Fast workflows with safety nets
+    
+    ```toml
+    [runtime]
+    ceiling = "full"
+    default_profile = "default"
+    
+    [profiles.default]
+    role = "human_developer"
+    capabilities = [
+      "lookup", "traverse", "read",
+      "change.apply", "session.begin", "session.commit",
+      "exec.task", "plan.execute"
+    ]
+    session_required_for_change = true
+    ```
+    
+    **Benefits**:
+    - Full access to all tools
+    - Mandatory sessions prevent accidents
+    - No approval overhead
+  </Tab>
+  
+  <Tab title="Team with Supervised Agents">
+    ### Engineering Team
+    
+    **Goal**: Agents can propose, humans approve
+    
+    ```toml
+    [runtime]
+    ceiling = "full"
+    default_profile = "supervised"
+    
+    [profiles.supervised]
+    role = "supervised_agent"
+    capabilities = [
+      "lookup", "traverse", "read",
+      "change.apply", "session.begin", "session.verify",
+      "exec.task", "plan.execute"
+    ]
+    session_required_for_change = true
+    promotion = "approval_required"
+    
+    [profiles.reviewer]
+    role = "human_reviewer"
+    capabilities = [
+      "lookup", "traverse", "read",
+      "session.verify", "session.commit", "session.rollback"
+    ]
+    ```
+    
+    **Workflow**:
+    1. Agent runs with `supervised` profile
+    2. Makes changes in shadow workspace
+    3. Cannot commit (lacks `session.commit`)
+    4. Human reviews with `reviewer` profile
+    5. Human commits or rolls back
+  </Tab>
+  
+  <Tab title="Enterprise with Strict Governance">
+    ### Large Organization
+    
+    **Goal**: Autonomous agents with audit trails
+    
+    ```toml
+    [runtime]
+    ceiling = "full"
+    default_profile = "autonomous"
+    
+    [profiles.autonomous]
+    role = "autonomous_agent"
+    capabilities = [
+      "lookup", "traverse", "read",
+      "change.apply", "session.begin", "session.commit",
+      "exec.task", "plan.execute"
+    ]
+    session_required_for_change = true
+    promotion = "automatic"
+    
+    [policy.audit]
+    log_all_operations = true
+    require_plan_artifacts = true
+    
+    [policy.exec]
+    blocklist = ["rm -rf", "curl", "wget"]
+    timeout = 300
+    ```
+    
+    **Benefits**:
+    - Full automation capability
+    - Complete audit logs
+    - Policy enforcement on dangerous commands
+  </Tab>
+  
+  <Tab title="Research Environment">
+    ### Experimental Workbench
+    
+    **Goal**: Safe exploration, no commits
+    
+    ```toml
+    [runtime]
+    ceiling = "lite"
+    default_profile = "explore"
+    
+    [profiles.explore]
+    role = "research_agent"
+    capabilities = ["lookup", "read", "traverse"]
+    session_required_for_change = false
+    ```
+    
+    **Use Case**:
+    - Code analysis agents
+    - Documentation generators
+    - Semantic search tools
+    - Read-only exploration
+  </Tab>
+</Tabs>
+
+## Session Requirements
+
+The `session_required_for_change` flag enforces transaction discipline:
+
+<Tabs>
+  <Tab title="Enabled (Recommended)">
+    ```toml
+    session_required_for_change = true
+    ```
+    
+    **Behavior**:
+    - All mutation tools require active workspace session
+    - Mutating plan execution requires session
+    - Prevents accidental direct edits
+    
+    **Example**:
+    ```bash
+    curd edit src/lib.rs::fn --code "..."  # ❌ Error: No active session
+    
+    curd workspace begin
+    curd edit src/lib.rs::fn --code "..."  # ✅ Success
+    curd workspace commit
+    ```
+  </Tab>
+  
+  <Tab title="Disabled (Advanced)">
+    ```toml
+    session_required_for_change = false
+    ```
+    
+    **Behavior**:
+    - Direct mutations allowed
+    - No transaction safety
+    - Useful for CI/CD pipelines
+    
+    <Warning>
+    Only disable for:
+    - CI environments with snapshot rollback
+    - Containerized ephemeral workspaces
+    - Automated test harnesses
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Promotion Modes
+
+The `promotion` field controls how changes move from shadow to workspace:
+
+<Tabs>
+  <Tab title="forbidden">
+    ```toml
+    promotion = "forbidden"
+    ```
+    
+    - Cannot commit changes
+    - Can only review in shadow workspace
+    - Suitable for read-only or assist profiles
+  </Tab>
+  
+  <Tab title="approval_required">
+    ```toml
+    promotion = "approval_required"
+    ```
+    
+    - Can stage changes
+    - Cannot commit without external approval
+    - Future: Integrate with approval workflows
+  </Tab>
+  
+  <Tab title="automatic">
+    ```toml
+    promotion = "automatic"
+    ```
+    
+    - Full commit capability
+    - Changes apply immediately after plan execution
+    - Suitable for autonomous agents
+  </Tab>
+</Tabs>
+
+## Policy Enforcement
+
+The third layer of control is the policy system in `settings.toml`:
+
+### Execution Policy
+
+```toml
+[policy.exec]
+allolist = ["cargo", "npm", "pytest", "go"]
+blocklist = ["rm -rf /", "curl", "wget", "dd"]
+timeout = 300  # seconds
+allow_background = false
+workspace_bound = true  # Commands must run within workspace root
+```
+
+### Plugin Policy
+
+```toml
+[policy.plugin]
+runtime_enabled = true
+install_requires_human = true
+trust_change_requires_human = true
+auto_trust_level = "low"
+```
+
+### File Policy
+
+```toml
+[policy.file]
+forbidden_paths = [".env", "credentials.json", "*.key"]
+max_file_size = 10485760  # 10MB
+```
+
+## Tools/List Metadata
+
+The `tools/list` operation exposes rich metadata for agents:
+
+```json
+{
+  "name": "edit",
+  "description": "Symbol-level code mutation",
+  "capability": "change.apply",
+  "operation": "mutate",
+  "available_in_lite": true,
+  "session_requirement": "required",
+  "approval_requirement": "none"
+}
+```
+
+<Info>
+**Agent Best Practice:**
+
+Always query `tools/list` before attempting operations. Respect the metadata instead of hardcoding assumptions.
+</Info>
+
+## Validating Configuration
+
+Check your effective runtime configuration:
+
+```bash
+curd doctor .
+```
+
+**Output:**
+
+```json
+{
+  "runtime": {
+    "ceiling": "full",
+    "active_profile": "supervised",
+    "session_enforcement": true
+  },
+  "capabilities": [
+    "lookup", "traverse", "read",
+    "change.apply", "session.begin", "session.verify"
+  ],
+  "policy": {
+    "exec_timeout": 300,
+    "plugin_runtime": true,
+    "workspace_bound": true
+  }
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Start Restrictive, Relax as Needed" icon="lock">
+    Begin with `lite` ceiling and `assist` profile. Gradually enable capabilities as you understand the workflow.
+  </Accordion>
+  
+  <Accordion title="Match Profile to Actor" icon="user-tag">
+    - Humans: `default` or `reviewer`
+    - Supervised agents: `supervised`
+    - Autonomous agents: `autonomous`
+    - CI/CD: `ci_strict`
+  </Accordion>
+  
+  <Accordion title="Always Require Sessions for Mutations" icon="shield">
+    Set `session_required_for_change = true` unless you have a specific reason not to.
+  </Accordion>
+  
+  <Accordion title="Use Policy for Defense in Depth" icon="layer-group">
+    Even with profiles, use policy blocklists and timeouts as an additional safety layer.
+  </Accordion>
+  
+  <Accordion title="Audit Regularly" icon="clipboard-list">
+    Review logs and operation history to ensure profiles are correctly configured.
+  </Accordion>
+</AccordionGroup>
+
+## Advanced: Dynamic Profile Selection
+
+Profiles can be selected per-operation:
+
+```rust
+// In application code
+let profile = if is_ci_context() {
+    "ci_strict"
+} else if user.is_reviewer() {
+    "reviewer"
+} else {
+    "supervised"
+};
+
+curd_client.search("alpha", profile)?;
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how profiles fit in the overall architecture
+  </Card>
+  <Card title="Shadow Workspace" icon="clone" href="/concepts/shadow-workspace">
+    Learn how sessions enforce profile boundaries
+  </Card>
+  <Card title="Code Intelligence" icon="magnifying-glass" href="/concepts/code-intelligence">
+    See which operations require which capabilities
+  </Card>
+  <Card title="Getting Started" icon="rocket" href="/quickstart">
+    Try different profiles in practice
+  </Card>
+</CardGroup>

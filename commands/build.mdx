@@ -1,0 +1,362 @@
+---
+title: 'curd build'
+description: 'Build via CURD control plane with adapter-based execution'
+---
+
+## Overview
+
+The `build` command provides a unified interface for building projects across different build systems (Cargo, npm, Make, etc.). It auto-detects your build system and routes commands through the appropriate adapter with policy enforcement and execution tracing.
+
+## Syntax
+
+```bash
+curd build [OPTIONS] [TARGET_OR_DIR] [DIR]
+```
+
+**Aliases:** `bld`, `b`
+
+## Parameters
+
+<ParamField path="target_or_dir" type="string">
+  Optional build target or directory:
+  - If a directory: workspace root
+  - If not a directory: build target (e.g., `test`, `release`)
+  - If omitted: defaults to current directory
+</ParamField>
+
+<ParamField path="dir" type="path">
+  Workspace root (only used when `target_or_dir` is a target, not a directory)
+</ParamField>
+
+<ParamField path="--adapter" type="string">
+  Build adapter override. Supported adapters:
+  - `cargo`, `cmake`, `ninja`, `make`
+  - `uv`, `poetry`, `pip`, `conda`, `mamba`
+  - `npm`, `yarn`, `pnpm`, `bun`
+</ParamField>
+
+<ParamField path="--profile" type="string">
+  Build profile: `debug` or `release`
+</ParamField>
+
+<ParamField path="--execute" type="boolean" default="true">
+  Execute planned commands (set to `false` for dry-run)
+</ParamField>
+
+<ParamField path="--plan" type="boolean" default="false">
+  Only show the build plan without executing
+</ParamField>
+
+<ParamField path="--command" type="string">
+  Custom command to run directly, overriding adapters (e.g., `pixi run dev2`)
+</ParamField>
+
+<ParamField path="--allow-untrusted" type="boolean" default="false">
+  Allow execution of custom adapters from `settings.toml` without prompt
+</ParamField>
+
+<ParamField path="--json" type="boolean" default="false">
+  Output results as JSON
+</ParamField>
+
+<ParamField path="--zig" type="boolean" default="false">
+  Use `cargo-zigbuild` instead of `cargo build` (Rust only)
+</ParamField>
+
+<ParamField path="trailing_args" type="array">
+  Arguments passed directly to the underlying compiler/adapter (after `--`)
+</ParamField>
+
+## Behavior
+
+- Auto-detects build system from workspace structure
+- Enforces policy rules from `settings.toml`
+- Traces all executed commands in audit log
+- Supports dry-run mode (`--plan`)
+- Interactive prompt for untrusted custom adapters
+- Captures stdout/stderr from build commands
+
+## Examples
+
+<CodeGroup>
+
+```bash Auto-Detect Build
+# Build using auto-detected adapter
+curd build
+```
+
+```bash Specific Target
+# Run specific build target
+curd build test
+curd build release
+```
+
+```bash Override Adapter
+# Force use of specific adapter
+curd build --adapter cargo
+curd build --adapter npm
+```
+
+```bash Dry-Run (Plan Only)
+# Show what would be executed
+curd build --plan
+curd build test --plan
+```
+
+```bash Custom Command
+# Run arbitrary command
+curd build --command "pixi run dev"
+```
+
+```bash Pass Arguments to Underlying Tool
+# Pass flags to cargo
+curd build -- --verbose --locked
+
+# Pass flags to npm
+curd build --adapter npm -- --production
+```
+
+```bash Zig Cross-Compilation (Rust)
+# Use cargo-zigbuild
+curd build --zig --profile release
+```
+
+```bash JSON Output
+# Machine-readable output
+curd build --json > build_result.json
+```
+
+</CodeGroup>
+
+## Supported Adapters
+
+### Rust
+- **Adapter:** `cargo`
+- **Auto-detect:** `Cargo.toml` present
+- **Profiles:** `debug`, `release`
+- **Targets:** `build`, `test`, `check`, `run`
+
+```bash
+curd build --adapter cargo
+curd build test --adapter cargo
+curd build --zig  # Use cargo-zigbuild
+```
+
+### Python
+- **Adapters:** `uv`, `poetry`, `pip`, `conda`, `mamba`
+- **Auto-detect:** `pyproject.toml`, `requirements.txt`, `environment.yml`
+
+```bash
+curd build --adapter uv
+curd build --adapter poetry
+```
+
+### JavaScript/TypeScript
+- **Adapters:** `npm`, `yarn`, `pnpm`, `bun`
+- **Auto-detect:** `package.json` present
+- **Targets:** `build`, `test`, `lint`
+
+```bash
+curd build --adapter npm
+curd build test --adapter yarn
+```
+
+### C/C++
+- **Adapters:** `cmake`, `ninja`, `make`
+- **Auto-detect:** `CMakeLists.txt`, `Makefile`, `build.ninja`
+
+```bash
+curd build --adapter make
+curd build --adapter cmake -- -DCMAKE_BUILD_TYPE=Release
+```
+
+## Custom Adapters
+
+Define custom adapters in `.curd/settings.toml`:
+
+```toml
+[build.adapters.custom]
+command = "./my_build.sh"
+args = ["--profile", "{{profile}}"]
+```
+
+Use with:
+```bash
+curd build --adapter custom
+```
+
+**Security:** Custom adapters require confirmation (unless `--allow-untrusted`):
+
+```bash
+curd build --adapter custom
+
+⚠️  UNTRUSTED BUILD ADAPTER DETECTED
+The adapter 'custom' is defined in .curd/settings.toml.
+Executing this adapter may run arbitrary commands.
+Continue? [y/N]: _
+```
+
+## Output Formats
+
+### Human-Readable (Default)
+
+```
+--- CURD BUILD EXECUTION ---
+  Adapter:   cargo
+  Profile:   release
+  Steps:     2
+    [1] cargo build --release
+         Result: SUCCESS
+    [2] cargo test --release
+         Result: SUCCESS
+
+✔ Build process completed successfully.
+```
+
+### JSON (`--json`)
+
+```json
+{
+  "adapter": "cargo",
+  "profile": "release",
+  "target": "build",
+  "steps": [
+    {
+      "command": ["cargo", "build", "--release"],
+      "success": true,
+      "stdout": "   Compiling myproject v0.1.0\n",
+      "stderr": "",
+      "exit_code": 0
+    }
+  ],
+  "status": "ok"
+}
+```
+
+## Shell Hook Integration
+
+Intercept native build commands via shell hooks:
+
+```bash
+# Install hook for your shell
+eval "$(curd hook bash)"
+
+# Now standard commands route through CURD
+make          # Actually runs: curd build --adapter make
+cargo build   # Actually runs: curd build --adapter cargo
+npm run build # Actually runs: curd build --adapter npm
+```
+
+Generate hooks:
+```bash
+curd hook bash >> ~/.bashrc
+curd hook zsh >> ~/.zshrc
+curd hook fish >> ~/.config/fish/config.fish
+```
+
+## Policy Enforcement
+
+Builds respect workspace policies:
+
+```toml
+[policy.exec]
+allow_background = false
+timeout_seconds = 300
+allowed_commands = ["cargo", "npm", "make"]
+```
+
+Blocked commands fail:
+```bash
+curd build --command "rm -rf /"
+# Error: Command 'rm' not in allowed_commands list
+```
+
+## Common Workflows
+
+### CI/CD Pipeline
+
+```bash
+# Initialize workspace
+curd init
+
+# Build in release mode
+curd build --profile release --plan  # Dry-run
+curd build --profile release         # Execute
+
+# Run tests
+curd build test --profile release
+
+# Output JSON for CI parsing
+curd build --json > build_result.json
+```
+
+### Local Development
+
+```bash
+# Quick build with auto-detect
+curd build
+
+# Run tests
+curd build test
+
+# Debug build with verbose output
+curd build -- --verbose
+```
+
+### Cross-Compilation (Rust)
+
+```bash
+# Use zig for cross-compilation
+curd build --zig --profile release -- --target x86_64-unknown-linux-musl
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Adapter not detected">
+    Explicitly specify the adapter:
+    ```bash
+    curd build --adapter cargo
+    ```
+    
+    Or check workspace structure:
+    ```bash
+    ls Cargo.toml package.json Makefile
+    ```
+  </Accordion>
+
+  <Accordion title="Build command fails">
+    Run with dry-run to see planned commands:
+    ```bash
+    curd build --plan
+    ```
+    
+    Check logs:
+    ```bash
+    curd log --limit 5
+    ```
+  </Accordion>
+
+  <Accordion title="Custom adapter blocked">
+    Use `--allow-untrusted` flag:
+    ```bash
+    curd build --adapter custom --allow-untrusted
+    ```
+    
+    Or confirm interactively when prompted.
+  </Accordion>
+
+  <Accordion title="Timeout during build">
+    Increase timeout in `settings.toml`:
+    ```toml
+    [policy.exec]
+    timeout_seconds = 600  # 10 minutes
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd hook](/commands/build#shell-hook-integration) - Shell command interception
+- [curd config](/configuration/settings) - Configure adapters and policies
+- [curd run](/workflows/script-lifecycle) - Execute `.curd` scripts

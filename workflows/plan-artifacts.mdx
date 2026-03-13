@@ -1,0 +1,238 @@
+---
+title: "Plan Artifacts"
+description: "Compiled execution contracts with safeguards and explainability"
+icon: "file-contract"
+---
+
+Plan artifacts are compiled execution contracts that CURD uses to run workflows. They're generated from `.curd` scripts and contain everything needed for governed, repeatable execution.
+
+## Why plan artifacts exist
+
+While `.curd` scripts are great for authoring, plan artifacts are better for execution:
+
+<CardGroup cols={2}>
+  <Card title="Bound arguments" icon="link">
+    Concrete values frozen at compile time
+  </Card>
+  
+  <Card title="Explainability" icon="lightbulb">
+    Metadata about intent, risks, and rationale
+  </Card>
+  
+  <Card title="Safeguards" icon="shield">
+    Execution limits and safety policies
+  </Card>
+  
+  <Card title="Profile context" icon="user-gear">
+    Runtime environment and capability ceiling
+  </Card>
+</CardGroup>
+
+This split makes CURD useful to both ends of the spectrum:
+
+- **Local developers** can stay in readable scripts
+- **Teams** can insist on inspectable compiled execution artifacts
+
+## Artifact structure
+
+A compiled plan artifact contains:
+
+### 1. Compiled DSL payload
+
+The execution graph with resolved tool calls and control flow.
+
+### 2. Source metadata
+
+- **Source hash**: Content hash of the original `.curd` file
+- **Source path**: Location of the source script
+- **Compilation timestamp**: When the artifact was generated
+
+### 3. Bound arguments
+
+Concrete values for all script arguments:
+
+```json
+{
+  "target_uri": "src/auth.rs::validate",
+  "strict": true
+}
+```
+
+### 4. Explainability metadata
+
+Structured comments from the source script:
+
+```json
+{
+  "explain": "tighten auth validation without changing the public entrypoint",
+  "why": "downstream callers depend on the current function name",
+  "risk": "auth and session modules are tightly connected",
+  "tags": ["security", "refactoring"]
+}
+```
+
+### 5. Safeguards
+
+- **Output limits**: Per-node and default output size caps
+- **Retry limits**: Failure retry policies
+- **Profile**: Active capability profile
+- **Session requirements**: Whether workspace session is mandatory
+
+### 6. Runtime ceiling snapshot
+
+Profile and mode constraints captured at compile time.
+
+<Note>
+Plan artifacts are stored in `.curd/plans/<plan-id>.json` and can be inspected, edited, and executed independently of the source script.
+</Note>
+
+## Storage location
+
+Artifacts live in `.curd/plans/` directory:
+
+```
+.curd/
+└── plans/
+    ├── fix-auth-20240315-1830.json
+    ├── refactor-types-20240316-0945.json
+    └── update-deps-20240316-1412.json
+```
+
+Each artifact is named with a descriptive slug and timestamp.
+
+## Editing plan artifacts
+
+You can refine compiled artifacts without touching the source script:
+
+```bash
+curd plan edit <plan-id>
+```
+
+Guided edits include:
+
+<AccordionGroup>
+  <Accordion title="Profile" icon="user-gear">
+    Change the execution profile (e.g., from `default` to `ci_strict`):
+    
+    This affects which tools are available and what filesystem boundaries apply.
+  </Accordion>
+
+  <Accordion title="Output limits" icon="gauge-high">
+    Set default and per-node output size limits:
+    
+    - **Default output_limit**: Applies to all nodes unless overridden
+    - **Per-node output_limit**: Fine-grained control for specific steps
+  </Accordion>
+
+  <Accordion title="Retry limits" icon="rotate">
+    Configure failure retry behavior:
+    
+    - **Default retry_limit**: How many times to retry failed steps
+    - **Per-node retry_limit**: Override for specific operations
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+Editing the plan artifact is where teams add **stronger execution posture** after authoring:
+
+- Choose a stricter profile
+- Lower output budgets
+- Reduce retries
+- Make the artifact fit the deployment environment
+</Tip>
+
+## Trust model
+
+CURD's separation of authoring and execution creates a clear trust boundary:
+
+```
+┌─────────────────┐
+│  .curd script   │  ← Easy to write, humans and agents author here
+└────────┬────────┘
+         │ compile
+         ▼
+┌─────────────────┐
+│ Plan artifact   │  ← Enriched with safeguards, easier to govern
+└────────┬────────┘
+         │ execute
+         ▼
+┌─────────────────┐
+│   Execution     │  ← Governed by profile and artifact constraints
+└─────────────────┘
+```
+
+This intentional separation means:
+
+- Scripts are **authoring-friendly**
+- Artifacts are **governance-ready**
+- Safeguards can be added **after impact is visible**
+
+## Parameterization
+
+One source script can produce multiple plan artifacts with different bound arguments:
+
+```curd
+arg target_uri: string
+arg strict: bool = true
+
+edit uri=$target_uri action="upsert" code=$patch
+verify_impact strict=$strict
+```
+
+Compile for different targets:
+
+```bash
+# First artifact
+curd run compile fix.curd --target-uri src/auth.rs::validate
+
+# Second artifact with different args
+curd run compile fix.curd --target-uri src/session.rs::verify --strict false
+```
+
+Each produces a distinct plan artifact with its own bound values.
+
+## When to care about plan artifacts
+
+Use compiled artifacts when you need:
+
+<CardGroup cols={2}>
+  <Card title="Stable history" icon="clock-rotate-left">
+    Execution records for audit trails
+  </Card>
+  
+  <Card title="Explicit safeguards" icon="shield-check">
+    Governed execution with clear limits
+  </Card>
+  
+  <Card title="Inspectable defaults" icon="magnifying-glass">
+    Visible constraints before execution
+  </Card>
+  
+  <Card title="Policy enforcement" icon="gavel">
+    Governance-ready execution records
+  </Card>
+</CardGroup>
+
+<Warning>
+If you're building **internal agent infrastructure**, the plan artifact is the part that matters most:
+
+- The artifact is the **execution object**
+- The script is the **authoring source**
+- The gap between them is where **safeguards, explainability, and policy become concrete**
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Script lifecycle" icon="rotate" href="/workflows/script-lifecycle">
+    Learn the check → compile → edit → execute flow
+  </Card>
+  
+  <Card title=".curd scripts" icon="scroll" href="/workflows/curd-scripts">
+    Master the source language syntax
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/workflows/examples">
+    See complete workflow patterns
+  </Card>
+</CardGroup>

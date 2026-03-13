@@ -1,0 +1,125 @@
+---
+title: 'DSL Overview'
+description: 'Introduction to CURD DSL syntax and workflow scripting'
+---
+
+## What is CURD DSL?
+
+CURD DSL is a domain-specific language for authoring code intelligence workflows. Files with the `.curd` extension define scripts that compile into executable plan artifacts.
+
+## Design Philosophy
+
+CURD separates **authoring** from **governed execution**:
+
+- `.curd` files are the **source format** - optimized for human and agent readability
+- **Compiled plan artifacts** are the **execution contract** - optimized for governance, repeatability, and safeguards
+
+<Note>
+  This separation allows developers to author readable scripts while teams can enforce inspectable execution artifacts with explicit safeguards.
+</Note>
+
+## Core Language Features
+
+The DSL supports:
+
+- **Statements**: `arg`, `let`, `use`, and tool-call statements
+- **Blocks**: `sequence`, `atomic`, `abort` for control flow
+- **Metadata**: Structured explainability comments
+- **Multiline strings**: For code patches and complex values
+
+## Basic Example
+
+```curd
+# explain: tighten auth validation without changing the public entrypoint
+# why: downstream callers depend on the current function name
+# risk: auth and session modules are tightly connected
+
+use session required
+
+let patch = """
+pub fn validate(token: &str) -> bool {
+    !token.is_empty()
+}
+"""
+
+atomic {
+  edit uri="src/auth.rs::validate" action="upsert" code=$patch
+  verify_impact strict=true
+}
+```
+
+## Script Lifecycle
+
+### 1. Check
+
+```bash
+curd run check fix_auth.curd
+```
+
+Compiles the script and reports:
+- Resolved targets
+- Graph-adjacent impact
+- Conflict risk
+- Session requirements
+- Suggested safeguards
+
+### 2. Compile
+
+```bash
+curd run compile fix_auth.curd
+```
+
+Emits a compiled plan artifact under `.curd/plans/` containing:
+- Compiled DSL/plan payload
+- Source hash
+- Bound argument values
+- Explainability metadata
+- Safeguards
+
+### 3. Execute
+
+```bash
+curd workspace begin
+curd run fix_auth.curd
+curd workspace commit
+```
+
+<Warning>
+  Mutating scripts require an active workspace session. Always use `workspace begin` before execution and `workspace commit` or `workspace rollback` after.
+</Warning>
+
+## When to Use .curd Scripts
+
+Use `.curd` when you want:
+
+- Readable, reusable workflows
+- Easier authoring than raw JSON
+- Iterative graph-aware preflight
+- Parameterized mutation patterns
+
+## When to Use Plan Artifacts
+
+Use compiled artifacts when you need:
+
+- Stable execution history
+- Explicit safeguards
+- Inspectable defaults
+- Governance-ready execution records
+
+<Info>
+  The gap between scripts and artifacts is where safeguards, explainability, and policy become concrete. For agent infrastructure, the plan artifact is the execution object.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Statements" icon="code" href="/api/dsl/statements">
+    Learn about arg, let, and use statements
+  </Card>
+  <Card title="Blocks" icon="cube" href="/api/dsl/blocks">
+    Understand sequence, atomic, and abort blocks
+  </Card>
+  <Card title="Metadata" icon="tags" href="/api/dsl/metadata">
+    Document intent with explainability comments
+  </Card>
+</CardGroup>

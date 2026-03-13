@@ -1,0 +1,381 @@
+---
+title: 'Metadata Comments'
+description: 'Explainability comments for governance and documentation'
+---
+
+## Structured Comments
+
+CURD DSL supports structured comments that are preserved into compiled plan artifacts. These comments provide explainability metadata for governance, auditing, and collaboration.
+
+<Info>
+  Unlike regular comments, structured metadata comments are extracted during compilation and stored in the plan artifact, making them queryable and enforceable.
+</Info>
+
+## Comment Types
+
+CURD recognizes five metadata comment types:
+
+1. `# explain:` - High-level intent and approach
+2. `# why:` - Justification and context
+3. `# risk:` - Known risks and concerns
+4. `# review:` - Review requirements and stakeholders
+5. `# tag:` - Categorization and indexing
+
+## Explain Comments
+
+Explain what the script does at a high level.
+
+### Syntax
+
+```curd
+# explain: <description>
+```
+
+### Examples
+
+```curd
+# explain: tighten auth validation without changing the public entrypoint
+```
+
+```curd
+# explain: migrate from session-based to token-based authentication
+```
+
+```curd
+# explain: refactor error handling to use Result types consistently
+```
+
+### Best Practices
+
+- Focus on **what** the script achieves, not implementation details
+- Keep it concise (one or two sentences)
+- State the intended outcome
+- Use active voice
+
+## Why Comments
+
+Explain the motivation and business context.
+
+### Syntax
+
+```curd
+# why: <justification>
+```
+
+### Examples
+
+```curd
+# why: downstream callers depend on the current function name
+```
+
+```curd
+# why: security audit identified session fixation vulnerabilities
+```
+
+```curd
+# why: current error handling causes panic in production
+```
+
+### Best Practices
+
+- Answer **why now** and **why this approach**
+- Connect to business needs or technical requirements
+- Reference external factors (audits, incidents, requirements)
+- Provide context that wouldn't be obvious from the code
+
+## Risk Comments
+
+Document known risks, dependencies, and failure modes.
+
+### Syntax
+
+```curd
+# risk: <risk_description>
+```
+
+### Examples
+
+```curd
+# risk: auth and session modules are tightly connected
+```
+
+```curd
+# risk: function is called from 15+ modules, requires coordinated update
+```
+
+```curd
+# risk: changes database schema, requires migration
+```
+
+### Best Practices
+
+- Be specific about **what could go wrong**
+- Identify **dependencies and coupling**
+- Note **blast radius** of changes
+- Mention **rollback complexity**
+- List **affected systems or modules**
+
+<Warning>
+  Risk comments are especially important for atomic blocks and high-impact changes. They help reviewers understand the stakes.
+</Warning>
+
+## Review Comments
+
+Specify review requirements and stakeholders.
+
+### Syntax
+
+```curd
+# review: <requirement>
+```
+
+### Examples
+
+```curd
+# review: security team
+```
+
+```curd
+# review: requires approval from platform and security teams
+```
+
+```curd
+# review: peer review sufficient, low risk
+```
+
+### Best Practices
+
+- Name **specific teams or individuals**
+- Indicate **approval requirements**
+- Note if changes need **multiple reviewers**
+- Specify **expertise needed** for review
+
+## Tag Comments
+
+Add categorical metadata for indexing and filtering.
+
+### Syntax
+
+```curd
+# tag: <category>
+```
+
+### Examples
+
+```curd
+# tag: security
+# tag: refactoring
+# tag: high-priority
+```
+
+```curd
+# tag: database-migration
+# tag: breaking-change
+```
+
+```curd
+# tag: tech-debt
+# tag: performance
+```
+
+### Best Practices
+
+- Use **consistent tag vocabulary** across your team
+- Create **tag conventions** for common categories:
+  - Severity: `low-risk`, `medium-risk`, `high-risk`
+  - Type: `bugfix`, `feature`, `refactor`, `security`
+  - Scope: `database`, `api`, `frontend`, `auth`
+  - Priority: `urgent`, `high-priority`, `low-priority`
+- Multiple tags are allowed and encouraged
+- Consider tags that match your incident or project management taxonomy
+
+## Complete Example
+
+```curd
+# explain: tighten auth validation without changing the public entrypoint
+# why: downstream callers depend on the current function name
+# risk: auth and session modules are tightly connected
+# review: security team
+# tag: security
+# tag: auth
+# tag: medium-risk
+
+use session required
+
+let patch = """
+pub fn validate(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    
+    // Enhanced validation
+    token.len() >= 32 && token.chars().all(|c| c.is_alphanumeric())
+}
+"""
+
+atomic {
+  edit uri="src/auth.rs::validate" action="upsert" code=$patch
+  verify_impact strict=true
+}
+```
+
+## Multi-Script Example
+
+```curd
+# explain: migrate authentication system from sessions to JWT tokens
+# why: session-based auth doesn't scale with our distributed architecture
+# why: security audit identified session fixation vulnerabilities
+# risk: breaks existing auth flow if not atomic
+# risk: affects all API endpoints, high blast radius
+# risk: requires client updates for new token format
+# review: security team, platform team, and API guild
+# tag: security
+# tag: breaking-change
+# tag: high-priority
+# tag: infrastructure
+
+use session required
+use profile production
+
+arg rollback_enabled: bool = true
+
+let token_impl = """
+pub fn validate_jwt(token: &str) -> Result<Claims> {
+    // JWT validation implementation
+}
+"""
+
+sequence {
+  # Phase 1: Add new token validation (non-breaking)
+  atomic {
+    edit uri="src/auth.rs" action="insert" code=$token_impl
+    verify_impact strict=true
+  }
+  
+  # Phase 2: Update all handlers to support both methods
+  atomic {
+    edit uri="src/api/handlers.rs" action="upsert" code=$dual_auth
+    edit uri="src/middleware/auth.rs" action="upsert" code=$dual_middleware
+  }
+  
+  # Phase 3: Remove old session validation (breaking)
+  atomic {
+    edit uri="src/auth.rs::validate_session" action="delete"
+    edit uri="src/session/store.rs" action="delete"
+  }
+}
+```
+
+## Metadata in Plan Artifacts
+
+When compiled, metadata comments are extracted and stored in the plan artifact:
+
+```json
+{
+  "plan_id": "plan-abc123",
+  "source_path": "workflows/auth_migration.curd",
+  "metadata": {
+    "explain": [
+      "migrate authentication system from sessions to JWT tokens"
+    ],
+    "why": [
+      "session-based auth doesn't scale with our distributed architecture",
+      "security audit identified session fixation vulnerabilities"
+    ],
+    "risk": [
+      "breaks existing auth flow if not atomic",
+      "affects all API endpoints, high blast radius",
+      "requires client updates for new token format"
+    ],
+    "review": [
+      "security team, platform team, and API guild"
+    ],
+    "tags": [
+      "security",
+      "breaking-change",
+      "high-priority",
+      "infrastructure"
+    ]
+  }
+}
+```
+
+<Note>
+  This structured format enables tooling to filter plans by tag, enforce review requirements, or generate audit reports.
+</Note>
+
+## Governance Use Cases
+
+<AccordionGroup>
+  <Accordion title="Automated review routing">
+    Use `review:` comments to automatically assign plans to appropriate teams in your CI/CD pipeline.
+  </Accordion>
+  
+  <Accordion title="Risk-based gating">
+    Implement policies that require additional approval steps for plans tagged `high-risk` or `breaking-change`.
+  </Accordion>
+  
+  <Accordion title="Audit trail generation">
+    Query plan artifacts by tag to generate compliance reports: "All security changes in Q1".
+  </Accordion>
+  
+  <Accordion title="Impact analysis">
+    Combine `risk:` comments with graph analysis to assess blast radius before execution.
+  </Accordion>
+  
+  <Accordion title="Knowledge base building">
+    Index plans by `explain:` and `why:` to create a searchable library of workflow patterns.
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices Summary
+
+<CardGroup cols={2}>
+  <Card title="Be Specific" icon="bullseye">
+    Avoid vague descriptions. "Update auth" is less useful than "migrate from session to JWT tokens".
+  </Card>
+  
+  <Card title="Layer Context" icon="layer-group">
+    Use multiple comment types to build complete picture: what (explain), why (justification), risks, and requirements.
+  </Card>
+  
+  <Card title="Think About Reviewers" icon="users">
+    Write comments for people who weren't in the room when you made decisions.
+  </Card>
+  
+  <Card title="Update Comments" icon="pen">
+    If the script changes significantly, update the metadata to match.
+  </Card>
+</CardGroup>
+
+## Anti-Patterns
+
+<Warning>
+  Avoid these common mistakes:
+</Warning>
+
+```curd
+# Bad: Too vague
+# explain: fix auth
+# why: it's broken
+
+# Good: Specific and actionable
+# explain: add empty string check to token validation
+# why: production error logs show 500 errors from empty tokens
+```
+
+```curd
+# Bad: Implementation details in explain
+# explain: change line 42 to use Result instead of Option
+
+# Good: Focus on intent
+# explain: improve error handling to distinguish validation failures from auth errors
+```
+
+```curd
+# Bad: Risks without specifics
+# risk: might break something
+
+# Good: Concrete risks
+# risk: auth module imported by 15 services, requires coordinated deploy
+```

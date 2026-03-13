@@ -1,0 +1,510 @@
+---
+title: "Docker"
+description: "Run CURD MCP server in containerized environments"
+icon: "docker"
+---
+
+## Overview
+
+CURD provides official Docker images for running the MCP server in containerized environments. This enables:
+
+- **Isolated execution** of CURD without host system dependencies
+- **Reproducible builds** with pinned versions and environments
+- **Cloud deployment** on Kubernetes, ECS, Cloud Run, etc.
+- **Multi-workspace orchestration** with container-per-project isolation
+
+<Info>
+  The Docker image packages the full CURD binary with MCP server mode enabled by default.
+</Info>
+
+## Quick Start
+
+Run the CURD MCP server on the current directory:
+
+```bash
+docker run -it --rm -v $(pwd):/workspace aerospeedsta/curd:latest
+```
+
+This starts CURD in MCP mode, exposing tools over stdio for the mounted workspace.
+
+## Docker Hub Images
+
+**Repository**: `aerospeedsta/curd`
+
+**Tags**:
+- `latest` - Most recent stable release
+- `0.7.1` - Specific version pinning
+- `0.7.1-beta` - Beta releases
+- `dev` - Bleeding edge (not recommended for production)
+
+```bash
+# Pull specific version
+docker pull aerospeedsta/curd:0.7.1
+
+# Pull latest
+docker pull aerospeedsta/curd:latest
+```
+
+## Image Structure
+
+The CURD Docker image is built from a multi-stage Dockerfile:
+
+```dockerfile
+# Stage 1: Build Rust binary
+FROM rust:1.75 AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release
+
+# Stage 2: Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/curd /usr/local/bin/curd
+
+WORKDIR /workspace
+ENTRYPOINT ["curd", "run"]
+CMD ["."]
+```
+
+<Note>
+  The image includes `git` for workspace operations and `ca-certificates` for HTTPS connectivity.
+</Note>
+
+## Volume Mounting
+
+Mount your workspace into `/workspace` for CURD to analyze:
+
+```bash
+# Mount current directory
+docker run -it --rm -v $(pwd):/workspace aerospeedsta/curd:latest
+
+# Mount specific path
+docker run -it --rm -v /home/user/project:/workspace aerospeedsta/curd:latest
+
+# Windows (PowerShell)
+docker run -it --rm -v ${PWD}:/workspace aerospeedsta/curd:latest
+```
+
+<Warning>
+  CURD requires read/write access to the workspace for shadow transactions. Ensure volume mounts have appropriate permissions.
+</Warning>
+
+## Environment Variables
+
+### Runtime Mode
+
+```bash
+# Run in Lite mode (restricted tools)
+docker run -it --rm -e CURD_MODE=lite -v $(pwd):/workspace aerospeedsta/curd:latest
+
+# Run in Full mode (all tools, default)
+docker run -it --rm -e CURD_MODE=full -v $(pwd):/workspace aerospeedsta/curd:latest
+```
+
+### Logging
+
+```bash
+# Enable debug logging
+docker run -it --rm -e RUST_LOG=debug -v $(pwd):/workspace aerospeedsta/curd:latest
+
+# Specific module logging
+docker run -it --rm -e RUST_LOG=curd_core=trace -v $(pwd):/workspace aerospeedsta/curd:latest
+```
+
+### Benchmark Tool
+
+```bash
+# Allow benchmark tool in release builds
+docker run -it --rm -e CURD_ALLOW_BENCHMARK=1 -v $(pwd):/workspace aerospeedsta/curd:latest
+```
+
+## Docker Compose
+
+For persistent services or multi-container setups:
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  curd-mcp:
+    image: aerospeedsta/curd:latest
+    environment:
+      - CURD_MODE=full
+      - RUST_LOG=info
+    volumes:
+      - ./workspace:/workspace
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+```
+
+Run:
+
+```bash
+docker-compose up -d
+```
+
+## MCP Client Connection
+
+Connect an MCP client to the containerized CURD server:
+
+### Docker Network Bridge
+
+```python
+import subprocess
+import json
+
+# Launch CURD container
+process = subprocess.Popen(
+    [
+        'docker', 'run', '-i', '--rm',
+        '-v', f'{os.getcwd()}:/workspace',
+        'aerospeedsta/curd:latest'
+    ],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=0
+)
+
+def send_request(method, params, req_id=1):
+    request = {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": method,
+        "params": params
+    }
+    process.stdin.write(json.dumps(request) + "\n")
+    process.stdin.flush()
+    
+    response = process.stdout.readline()
+    return json.loads(response)
+
+# Initialize MCP
+result = send_request("initialize", {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {"name": "docker-client", "version": "1.0.0"}
+})
+
+print(result)
+```
+
+### Named Container with Exec
+
+```bash
+# Start detached container
+docker run -d --name curd-server -v $(pwd):/workspace aerospeedsta/curd:latest
+
+# Attach stdin/stdout
+docker attach curd-server
+```
+
+## Kubernetes Deployment
+
+Deploy CURD as a service in Kubernetes:
+
+```yaml
+# curd-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: curd-mcp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: curd-mcp
+  template:
+    metadata:
+      labels:
+        app: curd-mcp
+    spec:
+      containers:
+      - name: curd
+        image: aerospeedsta/curd:0.7.1
+        env:
+        - name: CURD_MODE
+          value: "lite"
+        - name: RUST_LOG
+          value: "info"
+        volumeMounts:
+        - name: workspace
+          mountPath: /workspace
+        stdin: true
+        tty: true
+      volumes:
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: curd-workspace-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: curd-workspace-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+```
+
+Apply:
+
+```bash
+kubectl apply -f curd-deployment.yaml
+```
+
+## Cloud Platform Examples
+
+### AWS ECS Task Definition
+
+```json
+{
+  "family": "curd-mcp-task",
+  "containerDefinitions": [
+    {
+      "name": "curd",
+      "image": "aerospeedsta/curd:0.7.1",
+      "environment": [
+        {"name": "CURD_MODE", "value": "full"},
+        {"name": "RUST_LOG", "value": "info"}
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "workspace",
+          "containerPath": "/workspace"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/curd-mcp",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "curd"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "workspace",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-12345678",
+        "rootDirectory": "/workspace"
+      }
+    }
+  ]
+}
+```
+
+### Google Cloud Run
+
+```bash
+gcloud run deploy curd-mcp \
+  --image aerospeedsta/curd:0.7.1 \
+  --set-env-vars CURD_MODE=lite \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated
+```
+
+## Custom Dockerfile
+
+Extend the base image for custom setups:
+
+```dockerfile
+FROM aerospeedsta/curd:0.7.1
+
+# Install additional tools
+RUN apt-get update && apt-get install -y \
+    python3 \
+    nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy custom settings
+COPY settings.toml /workspace/.curd/settings.toml
+
+# Pre-install plugins
+RUN curd plugin-trust add --key-id example --pubkey-hex abcd1234
+RUN curd plugin-tool add /plugins/example.curdt
+
+ENTRYPOINT ["curd", "run"]
+CMD ["."]
+```
+
+Build:
+
+```bash
+docker build -t my-curd:latest .
+```
+
+## Security Considerations
+
+<CardGroup cols={2}>
+  <Card title="Non-Root User" icon="user-shield">
+    Run CURD as a non-root user inside the container:
+    
+    ```dockerfile
+    RUN useradd -m -u 1000 curd
+    USER curd
+    ```
+  </Card>
+  
+  <Card title="Read-Only Root" icon="lock">
+    Mount root filesystem as read-only:
+    
+    ```bash
+    docker run --read-only \
+      -v $(pwd):/workspace \
+      aerospeedsta/curd:latest
+    ```
+  </Card>
+  
+  <Card title="Network Isolation" icon="network-wired">
+    Disable network access if not needed:
+    
+    ```bash
+    docker run --network none \
+      -v $(pwd):/workspace \
+      aerospeedsta/curd:latest
+    ```
+  </Card>
+  
+  <Card title="Resource Limits" icon="gauge-high">
+    Set CPU and memory limits:
+    
+    ```bash
+    docker run --cpus=2 --memory=4g \
+      -v $(pwd):/workspace \
+      aerospeedsta/curd:latest
+    ```
+  </Card>
+</CardGroup>
+
+## Performance Tuning
+
+### Indexing Large Repositories
+
+```bash
+# Allocate more memory for large codebases
+docker run -it --rm \
+  --memory=8g \
+  --cpus=4 \
+  -v $(pwd):/workspace \
+  aerospeedsta/curd:latest
+```
+
+### Persistent Cache
+
+Mount `.curd` directory for faster subsequent runs:
+
+```bash
+docker run -it --rm \
+  -v $(pwd):/workspace \
+  -v curd-cache:/workspace/.curd \
+  aerospeedsta/curd:latest
+```
+
+## Troubleshooting
+
+### Permission Errors
+
+**Cause**: Host user ID doesn't match container user.
+
+**Solution**:
+```bash
+# Run as host user
+docker run -it --rm \
+  --user $(id -u):$(id -g) \
+  -v $(pwd):/workspace \
+  aerospeedsta/curd:latest
+```
+
+### Git Operations Fail
+
+**Cause**: Git credentials not available in container.
+
+**Solution**:
+```bash
+# Mount SSH keys
+docker run -it --rm \
+  -v $(pwd):/workspace \
+  -v ~/.ssh:/root/.ssh:ro \
+  aerospeedsta/curd:latest
+
+# Or mount git config
+docker run -it --rm \
+  -v $(pwd):/workspace \
+  -v ~/.gitconfig:/root/.gitconfig:ro \
+  aerospeedsta/curd:latest
+```
+
+### Container Exits Immediately
+
+**Cause**: No stdin attached in MCP mode.
+
+**Solution**:
+```bash
+# Always use -i flag for MCP
+docker run -i --rm \
+  -v $(pwd):/workspace \
+  aerospeedsta/curd:latest
+```
+
+## Building from Source
+
+Build your own CURD Docker image:
+
+```bash
+git clone https://github.com/aerospeedsta/curd.git
+cd curd
+
+# Build image
+docker build -t curd:local .
+
+# Run
+docker run -it --rm -v $(pwd):/workspace curd:local
+```
+
+## Multi-Architecture Support
+
+CURD images support multiple architectures:
+
+- `linux/amd64` (x86_64)
+- `linux/arm64` (Apple Silicon, ARM servers)
+
+```bash
+# Pull for specific architecture
+docker pull --platform linux/arm64 aerospeedsta/curd:latest
+
+# Build for multiple architectures
+docker buildx build --platform linux/amd64,linux/arm64 -t aerospeedsta/curd:latest .
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="MCP Server" href="/integration/mcp-server" icon="plug">
+    Understand the MCP protocol implementation
+  </Card>
+  
+  <Card title="Python Binding" href="/integration/python-binding" icon="python">
+    Use CURD from Python environments
+  </Card>
+  
+  <Card title="Node.js Binding" href="/integration/nodejs-binding" icon="node-js">
+    Use CURD from JavaScript/TypeScript
+  </Card>
+  
+  <Card title="Settings & Profiles" href="/configuration/settings" icon="gear">
+    Configure CURD behavior
+  </Card>
+</CardGroup>

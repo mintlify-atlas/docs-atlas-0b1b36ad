@@ -1,0 +1,453 @@
+---
+title: 'shell'
+description: 'Sandboxed shell command execution'
+---
+
+## Description
+
+The `shell` tool provides secure subprocess execution with sandbox isolation, binary allowlists, timeout enforcement, and background task management.
+
+<Warning>
+**Session Required**: Destructive commands (e.g., `rm`, `cargo clean`) require an active workspace session to ensure changes can be rolled back.
+</Warning>
+
+## Request Parameters
+
+<ParamField path="command" type="string" required>
+  Shell command to execute. Must not contain shell metacharacters (`;`, `&`, `|`, `` ` ``, `$()`).
+</ParamField>
+
+<ParamField path="background" type="boolean">
+  Run in background mode. Returns immediately with a `task_id`. Default: `false`
+</ParamField>
+
+<ParamField path="cwd" type="string">
+  Working directory (relative to workspace root). Must not escape workspace boundary.
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+### Foreground Execution
+
+<ResponseField name="command" type="string" required>
+  Executed command
+</ResponseField>
+
+<ResponseField name="stdout" type="string" required>
+  Standard output (max 1 MB)
+</ResponseField>
+
+<ResponseField name="stderr" type="string" required>
+  Standard error (max 1 MB)
+</ResponseField>
+
+<ResponseField name="exit_code" type="number" required>
+  Exit code (0 = success)
+</ResponseField>
+
+<ResponseField name="graph_context" type="object">
+  Automatically extracted symbol references from output
+  
+  <Expandable>
+    <ResponseField name="mentioned_symbols" type="array">Detected symbol names in output</ResponseField>
+    <ResponseField name="file_references" type="array">Detected file paths in output</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Background Execution
+
+<ResponseField name="status" type="string" required>
+  Always `"background"`
+</ResponseField>
+
+<ResponseField name="task_id" type="string" required>
+  UUID for tracking the background task
+</ResponseField>
+
+<ResponseField name="command" type="string" required>
+  Executed command
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json Run Tests (Foreground)
+{
+  "command": "cargo test"
+}
+```
+
+```json Run Build (Background)
+{
+  "command": "npm run build",
+  "background": true
+}
+```
+
+```json Custom Working Directory
+{
+  "command": "pytest tests/unit",
+  "cwd": "packages/backend"
+}
+```
+
+```json Check Status
+{
+  "command": "git status"
+}
+```
+
+</CodeGroup>
+
+### Response Examples
+
+#### Foreground Success
+
+```json
+{
+  "command": "cargo test",
+  "stdout": "running 12 tests\ntest result: ok. 12 passed; 0 failed\n",
+  "stderr": "",
+  "exit_code": 0,
+  "graph_context": {
+    "mentioned_symbols": ["calculate_score", "normalize"],
+    "file_references": ["src/lib.rs", "src/utils.rs"]
+  }
+}
+```
+
+#### Foreground Failure
+
+```json
+{
+  "command": "cargo test",
+  "stdout": "running 12 tests\n",
+  "stderr": "error: test failed, to rerun pass '--lib'\ntest calculate_score ... FAILED\n",
+  "exit_code": 101,
+  "graph_context": {
+    "mentioned_symbols": ["calculate_score"],
+    "file_references": ["src/lib.rs"]
+  }
+}
+```
+
+#### Background Started
+
+```json
+{
+  "status": "background",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "command": "npm run build"
+}
+```
+
+## Background Task Management
+
+### Check Task Status
+
+```json shell_status tool
+{
+  "tool": "shell_status",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### Response
+
+```json Task still running
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "command": "npm run build",
+  "active": true,
+  "exit_code": null,
+  "stdout": "Building...\n",
+  "stderr": ""
+}
+```
+
+```json Task completed
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "command": "npm run build",
+  "active": false,
+  "exit_code": 0,
+  "stdout": "Build completed successfully\n",
+  "stderr": ""
+}
+```
+
+### Terminate Task
+
+```json terminate tool
+{
+  "tool": "terminate",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### Response
+
+```json
+{
+  "status": "terminated",
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+## Security Sandbox
+
+CURD uses OS-level sandboxing:
+
+| Platform | Sandbox Mechanism |
+|----------|------------------|
+| Linux | `bwrap` (Bubblewrap) |
+| macOS | `sandbox-exec` |
+| Windows | Windows Sandbox (planned) |
+
+### Sandbox Restrictions
+
+- **Filesystem**: Read/write access limited to workspace root
+- **Network**: Restricted (configurable via policy)
+- **Process**: Cannot spawn privileged processes
+- **IPC**: Limited inter-process communication
+
+## Binary Allowlist
+
+Only approved binaries can be executed. Configure in `settings.toml`:
+
+```toml
+[policy]
+allowed_binaries = [
+  "cargo", "rustc",
+  "npm", "node", "yarn", "pnpm",
+  "python", "python3", "pytest",
+  "go",
+  "make", "cmake", "ninja",
+  "git"
+]
+```
+
+### Default Allowlist
+
+If not configured, CURD uses a safe default:
+
+```rust
+["cargo", "npm", "yarn", "pnpm", "bun", "python", "python3", "pytest",
+ "node", "make", "ninja", "cmake", "go", "gcc", "clang", "g++",
+ "clang++", "rustc", "tsc", "jest", "vitest", "npx", "echo",
+ "sleep", "cat", "ls", "grep", "curd"]
+```
+
+### Blocked Binary Error
+
+```json
+{
+  "error": "Command 'rm' is not in the allowed binaries list."
+}
+```
+
+## Timeout Enforcement
+
+### Foreground Timeout
+
+- **Default**: 60 seconds
+- **Configurable**: Via `CURD_SHELL_TIMEOUT_SECS` environment variable
+
+```json Timeout error
+{
+  "error": "Command exceeded foreground timeout of 60s."
+}
+```
+
+### Background Timeout
+
+No timeout - tasks run until completion or manual termination.
+
+<Warning>
+Background tasks are limited to **16 concurrent tasks** to prevent resource exhaustion.
+</Warning>
+
+## Shell Metacharacter Blocking
+
+The following shell metacharacters are **forbidden**:
+
+- `;` - Command chaining
+- `&` - Background operator
+- `|` - Pipe operator
+- `` ` `` - Command substitution
+- `$()` - Command substitution
+
+### Error Example
+
+```json
+{
+  "error": "Command chaining or subshells (';') are forbidden in the sandbox."
+}
+```
+
+<Tip>
+**Workaround**: Use background tasks or multiple sequential `shell` calls instead of chaining.
+</Tip>
+
+## Package Manager Policy
+
+CURD detects package manager mutation commands:
+
+| Package Manager | Mutation Commands |
+|-----------------|------------------|
+| `cargo` | `add`, `remove`, `update` |
+| `npm`/`yarn`/`pnpm` | `install`, `remove`, `update`, `add` |
+| `pip` | `install`, `uninstall` |
+| `go` | `get` |
+| `vcpkg` | `install`, `remove`, `update` |
+
+### Policy Enforcement
+
+Mutation commands should be performed via specialized tools (planned) or within a transaction:
+
+```json
+// ❌ Direct mutation (discouraged)
+{"tool": "shell", "command": "cargo add serde"}
+
+// ✅ Within transaction (encouraged)
+{"tool": "workspace", "action": "begin"}
+{"tool": "shell", "command": "cargo add serde"}
+{"tool": "workspace", "action": "commit"}
+```
+
+## Graph Context Extraction
+
+CURD automatically parses command output for relevant symbols and files:
+
+```json
+{
+  "graph_context": {
+    "mentioned_symbols": [
+      "calculate_score",
+      "normalize",
+      "User::to_dict"
+    ],
+    "file_references": [
+      "src/lib.rs",
+      "src/utils.rs",
+      "src/models.rs"
+    ]
+  }
+}
+```
+
+Use this to:
+- Auto-link test failures to source code
+- Identify affected symbols in build errors
+- Track fault propagation
+
+## Shadow Workspace Execution
+
+When a transaction is active, all shell commands execute in the shadow workspace:
+
+```json
+// 1. Start session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Edit file
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "..."}
+
+// 3. Run tests (uses shadow workspace)
+{"tool": "shell", "command": "cargo test"}
+// Tests run against EDITED version (not committed yet)
+
+// 4. Commit or rollback
+{"tool": "workspace", "action": "commit"}
+```
+
+This enables "test before commit" workflows.
+
+## Working Directory Validation
+
+The `cwd` parameter must:
+- Be relative to workspace root
+- Not escape workspace boundary (no `..` traversal)
+- Exist or be creatable
+
+### Valid Examples
+
+```json
+{"cwd": "packages/backend"}
+{"cwd": "src/tests"}
+{"cwd": "."}
+```
+
+### Invalid Examples
+
+```json Error: Traversal attempt
+{"cwd": "../../../etc"}
+// Error: "Path '../../../etc' contains traversal attempts..."
+```
+
+```json Error: Absolute path
+{"cwd": "/usr/bin"}
+// Error: "Path '/usr/bin' contains ... absolute roots."
+```
+
+## Error Handling
+
+```json Command not found
+{
+  "error": "Failed to spawn process: No such file or directory (os error 2)"
+}
+```
+
+```json Exit code non-zero
+{
+  "command": "cargo test",
+  "stdout": "...",
+  "stderr": "test failed",
+  "exit_code": 101
+}
+```
+
+```json Background task limit
+{
+  "error": "Background task limit exceeded (16 active tasks)."
+}
+```
+
+```json Timeout
+{
+  "error": "Command exceeded foreground timeout of 60s."
+}
+```
+
+## Configuration
+
+### Policy Configuration
+
+```toml settings.toml
+[policy]
+allowed_binaries = ["cargo", "npm", "python3"]
+
+[policy.exec]
+allow_raw_command = true   # Enable shell tool
+allow_background = true    # Enable background tasks
+```
+
+### Environment Variables
+
+- `CURD_SHELL_TIMEOUT_SECS` - Foreground timeout (default: 60)
+- `CURD_MAX_BACKGROUND_TASKS` - Background task limit (default: 16)
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="workspace" icon="folder-tree" href="/api/tools/workspace">
+    Manage sessions for shell mutations
+  </Card>
+  <Card title="build" icon="hammer" href="/commands/build">
+    Specialized build tool (coming soon)
+  </Card>
+</CardGroup>

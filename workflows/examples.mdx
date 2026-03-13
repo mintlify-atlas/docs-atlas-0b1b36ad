@@ -1,0 +1,387 @@
+---
+title: "Workflow Examples"
+description: "Real-world .curd script patterns and use cases"
+icon: "code"
+---
+
+This page shows practical `.curd` script examples for common workflow automation patterns.
+
+## Basic refactoring
+
+Update a function with safety checks:
+
+```curd
+# explain: refactor authentication to return Result instead of bool
+# why: better error handling for downstream callers
+# risk: changes public API surface
+# review: requires approval from API team
+
+use session required
+use profile default
+
+arg target_function: string = "validate"
+
+let new_signature = """
+pub fn validate(token: &str) -> Result<bool, AuthError> {
+    if token.is_empty() {
+        return Err(AuthError::EmptyToken);
+    }
+    Ok(token.len() >= 32)
+}
+"""
+
+sequence {
+  # Read existing implementation for context
+  read uri="src/auth.rs::${target_function}"
+  
+  # Apply change atomically with verification
+  atomic {
+    edit uri="src/auth.rs::${target_function}" action="upsert" code=$new_signature
+    verify_impact strict=true
+  }
+}
+```
+
+**Key patterns**:
+- Explainability comments document intent and risks
+- Arguments make the script reusable
+- `atomic` block ensures all-or-nothing execution
+- `verify_impact` checks for unintended consequences
+
+## Multi-file refactoring
+
+Update related functions across multiple files:
+
+```curd
+# explain: migrate from synchronous to async database calls
+# why: improve concurrency and reduce blocking operations
+# risk: changes call patterns in 15+ files
+# tag: async-migration, database
+
+use session required
+use profile default
+
+arg modules: string = "auth,api,handlers"
+
+let async_db_trait = """
+#[async_trait]
+pub trait Database {
+    async fn query(&self, sql: &str) -> Result<Rows, DbError>;
+    async fn execute(&self, sql: &str) -> Result<u64, DbError>;
+}
+"""
+
+sequence {
+  # Update trait definition
+  atomic {
+    edit uri="src/db/traits.rs::Database" action="replace" code=$async_db_trait
+    verify_impact strict=true
+  }
+  
+  # Update implementation
+  atomic {
+    edit uri="src/db/postgres.rs::PostgresDb" action="update" pattern="impl Database"
+    verify_impact strict=true
+  }
+  
+  # Verify graph integrity
+  shell command="cargo check --lib" timeout=30
+}
+```
+
+**Key patterns**:
+- Multiple `atomic` blocks for independent changes
+- `shell` command for external validation
+- Timeout limits prevent hanging
+
+## Dependency updates
+
+Update dependencies with testing:
+
+```curd
+# explain: update axum framework to v0.7.x
+# why: security patches and performance improvements
+# risk: breaking changes in router API
+# review: run full integration test suite
+
+use session required
+use profile default
+
+let cargo_update = """
+[dependencies]
+axum = "0.7.5"
+tokio = { version = "1.37", features = ["full"] }
+"""
+
+sequence {
+  # Update Cargo.toml
+  edit uri="Cargo.toml::dependencies" action="upsert" code=$cargo_update
+  
+  # Verify it compiles
+  shell command="cargo check" timeout=60
+  
+  # Run tests
+  shell command="cargo test" timeout=300
+  
+  # If tests fail, abort
+  verify_tests_passed
+}
+```
+
+**Key patterns**:
+- Sequential execution for dependent steps
+- Compilation checks before tests
+- Validation gates prevent bad commits
+
+## Code generation
+
+Generate boilerplate code from templates:
+
+```curd
+# explain: scaffold new REST endpoint with CRUD operations
+# why: reduce boilerplate and ensure consistency
+# tag: code-generation, api
+
+use session required
+use profile default
+
+arg resource_name: string
+arg table_name: string
+
+let handler_template = """
+pub async fn create_${resource_name}(
+    State(db): State<Database>,
+    Json(payload): Json<Create${resource_name}>,
+) -> Result<Json<${resource_name}>, ApiError> {
+    let result = db.insert("${table_name}", &payload).await?;
+    Ok(Json(result))
+}
+
+pub async fn get_${resource_name}(
+    State(db): State<Database>,
+    Path(id): Path<i64>,
+) -> Result<Json<${resource_name}>, ApiError> {
+    let result = db.query_one("${table_name}", id).await?;
+    Ok(Json(result))
+}
+"""
+
+let route_template = """
+router.route("/${resource_name}", post(create_${resource_name}))
+      .route("/${resource_name}/:id", get(get_${resource_name}))
+"""
+
+sequence {
+  # Generate handler file
+  edit uri="src/api/${resource_name}.rs" action="create" code=$handler_template
+  
+  # Update router
+  edit uri="src/api/routes.rs::configure" action="append" code=$route_template
+  
+  # Verify compilation
+  shell command="cargo check" timeout=60
+}
+```
+
+**Key patterns**:
+- Template strings with variable interpolation
+- File creation with `action="create"`
+- Appending to existing code
+
+## Migration scripts
+
+Perform database schema migrations:
+
+```curd
+# explain: add user authentication tables
+# why: new authentication feature requires dedicated schema
+# risk: downtime during migration on production
+# review: DBA approval required for production execution
+
+use session required
+use profile ci_strict
+
+arg environment: string = "development"
+
+let migration_up = """
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_users_email ON users(email);
+"""
+
+let migration_down = """
+DROP TABLE IF EXISTS users;
+"""
+
+sequence {
+  # Create migration files
+  edit uri="migrations/001_create_users_up.sql" action="create" code=$migration_up
+  edit uri="migrations/001_create_users_down.sql" action="create" code=$migration_down
+  
+  # Run migration (only in non-production)
+  shell command="sqlx migrate run" timeout=30
+}
+```
+
+**Key patterns**:
+- Environment-specific behavior via arguments
+- Up/down migration pairs
+- Controlled timeout for database operations
+
+## Testing automation
+
+Generate and run tests for a module:
+
+```curd
+# explain: generate property-based tests for validation module
+# why: ensure validation logic handles edge cases
+# tag: testing, validation
+
+use session required
+use profile default
+
+arg module_name: string = "validation"
+
+let test_template = """
+#[cfg(test)]
+mod ${module_name}_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_validation_never_panics(input in ".*") {
+            let _ = validate(&input);
+        }
+        
+        #[test]
+        fn test_validation_empty_string(input in "") {
+            assert!(validate(&input).is_err());
+        }
+    }
+}
+"""
+
+sequence {
+  # Add tests to module
+  edit uri="src/${module_name}.rs" action="append" code=$test_template
+  
+  # Run tests
+  shell command="cargo test ${module_name}_tests" timeout=60
+}
+```
+
+**Key patterns**:
+- Test code generation
+- Immediate test execution for verification
+
+## Documentation generation
+
+Generate docs from code structure:
+
+```curd
+# explain: generate API documentation from OpenAPI schema
+# why: keep docs in sync with implementation
+# tag: documentation, api
+
+use session required
+use profile default
+
+arg schema_path: string = "openapi.yaml"
+arg output_path: string = "docs/api"
+
+sequence {
+  # Read OpenAPI schema
+  read uri=$schema_path
+  
+  # Generate markdown docs
+  shell command="openapi-generator generate -i ${schema_path} -g markdown -o ${output_path}" timeout=30
+  
+  # Verify docs were created
+  read uri="${output_path}/README.md"
+}
+```
+
+**Key patterns**:
+- External tool integration via `shell`
+- Verification reads after generation
+
+## Conditional execution
+
+Abort based on preconditions:
+
+```curd
+# explain: deploy only if tests pass and environment is staging
+# why: prevent accidental production deployments
+# risk: deployment requires manual approval in production
+
+use session required
+use profile ci_strict
+
+arg environment: string
+arg skip_tests: bool = false
+
+# Validate environment
+sequence {
+  # Only allow staging or production
+  validate_environment env=$environment
+  
+  # Abort if production without explicit flag
+  abort "Production deployments require manual approval"
+}
+```
+
+**Key patterns**:
+- Early validation and abort
+- Safety checks before dangerous operations
+
+## Batch operations
+
+Process multiple items with the same operation:
+
+```curd
+# explain: apply consistent formatting to all Rust modules
+# why: enforce code style standards
+# tag: formatting, maintenance
+
+use session required
+use profile default
+
+arg modules: string = "auth,api,db,handlers,types"
+
+sequence {
+  # Format all modules
+  shell command="cargo fmt" timeout=30
+  
+  # Check for any remaining issues
+  shell command="cargo clippy -- -D warnings" timeout=60
+  
+  # Verify everything still compiles
+  shell command="cargo check --all-targets" timeout=90
+}
+```
+
+**Key patterns**:
+- Sequential validation chain
+- Increasing timeout for more expensive operations
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title=".curd scripts" icon="scroll" href="/workflows/curd-scripts">
+    Learn the script syntax in detail
+  </Card>
+  
+  <Card title="Script lifecycle" icon="rotate" href="/workflows/script-lifecycle">
+    Understand the execution workflow
+  </Card>
+  
+  <Card title="Plan artifacts" icon="file-contract" href="/workflows/plan-artifacts">
+    See how scripts compile to artifacts
+  </Card>
+</CardGroup>

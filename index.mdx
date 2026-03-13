@@ -1,97 +1,162 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Code Intelligence Control Plane"
+description: "Safe code mutation, graph analysis, and workflow automation for humans and agents"
 ---
 
-## Setting up
+<div className="relative overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-8 shadow-[0_2px_8px_rgba(0,0,0,0.7)]">
+  <div className="mx-auto max-w-4xl">
+    <h1 className="mb-4 text-5xl font-bold text-[#d9d6d1]">
+      CURD
+    </h1>
+    <p className="mb-6 text-xl text-[#d9d6d1]/80">
+      A code-intelligence control plane that makes version control workable again
+    </p>
+    <div className="flex gap-4">
+      <a
+        href="/quickstart"
+        className="inline-flex items-center rounded-lg bg-[#00b3a4] px-6 py-3 font-semibold text-[#f0e9e0] transition hover:bg-[#00a090]"
+      >
+        Get Started
+      </a>
+      <a
+        href="https://github.com/aerospeedsta/curd"
+        className="inline-flex items-center rounded-lg border border-[#2a2a2a] bg-transparent px-6 py-3 font-semibold text-[#f0e9e0] transition hover:bg-[#1a1a1a]"
+      >
+        View on GitHub
+      </a>
+    </div>
+  </div>
+</div>
 
-Get your documentation site up and running in minutes.
+## What is CURD?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
+CURD is a code-intelligence control plane for humans and agents. It helps you understand a codebase structurally, mutate code safely inside a shadow workspace, inspect graph impact before committing changes, and author repeatable workflows in `.curd` source scripts.
+
+<CardGroup cols={2}>
+  <Card title="Symbol-Aware Search" icon="magnifying-glass" href="/concepts/code-intelligence">
+    BM25/FTS-backed ranked search with Tree-sitter parsing for structural understanding
+  </Card>
+  <Card title="Shadow Workspace" icon="layer-group" href="/concepts/shadow-workspace">
+    Safe mutation with transaction-based rollback and commit workflows
+  </Card>
+  <Card title="Graph Analysis" icon="diagram-project" href="/commands/graph">
+    Dependency graph traversal and impact analysis before making changes
+  </Card>
+  <Card title="Workflow Automation" icon="code" href="/workflows/curd-scripts">
+    Author repeatable workflows with `.curd` scripts and compiled plan artifacts
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+<Steps>
+  <Step title="Install CURD">
+    Choose your preferred installation method:
+    
+    <CodeGroup>
+    ```bash macOS / Linux (Homebrew)
+    brew tap aerospeedsta/curd && brew install curd
+    ```
+    
+    ```bash Windows (Winget)
+    winget install curd
+    ```
+    
+    ```bash Python (uvx)
+    uvx --from curd-python curd --version
+    ```
+    
+    ```bash Node.js (bunx)
+    bunx --bun curd-node --version
+    ```
+    </CodeGroup>
+  </Step>
+  
+  <Step title="Initialize a workspace">
+    From your project root, initialize CURD:
+    
+    ```bash
+    curd init
+    curd doctor .
+    ```
+  </Step>
+  
+  <Step title="Start exploring">
+    Use CURD's code intelligence tools:
+    
+    ```bash
+    curd search alpha
+    curd read src/lib.rs::alpha
+    curd graph src/lib.rs::alpha --depth 2
+    ```
+  </Step>
+</Steps>
+
+## Core Features
+
+<CardGroup cols={2}>
+  <Card title="Code Intelligence" icon="brain" href="/concepts/code-intelligence">
+    Search, read, and graph commands for understanding codebases structurally
+  </Card>
+  <Card title="Safe Mutation" icon="shield-check" href="/commands/edit">
+    Edit commands with shadow workspace protection and conflict detection
+  </Card>
+  <Card title="Profile-Based Control" icon="user-shield" href="/concepts/profiles-and-runtime">
+    Runtime ceilings and profile-based capability gating for governance
+  </Card>
+  <Card title="Plugin System" icon="puzzle-piece" href="/extensions/plugin-system">
+    Signed `.curdl` and `.curdt` plugin packages for language and tool extensions
+  </Card>
+  <Card title="Build Adapters" icon="hammer" href="/configuration/build-adapters">
+    Multi-language build system detection and execution control
+  </Card>
+  <Card title="MCP Server" icon="server" href="/integration/mcp-server">
+    Model Context Protocol server for agent integration
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+### Local Development
+Use CURD as a serious solo coding tool with interactive REPL and CLI commands.
+
+<Card title="Local Developer Workflow" icon="laptop-code" href="/quickstart#local-workflow">
+  Fast, safe code exploration and mutation without ceremony
 </Card>
 
-## Make it yours
+### Agent Backend
+Use CURD as a supervised agent backend with governed execution and plan artifacts.
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
-
-## Create beautiful pages
-
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
+<Card title="Agent Workflow" icon="robot" href="/quickstart#agent-workflow">
+  Reviewable authoring-to-execution flow with compiled plans
 </Card>
+
+### Team Governance
+Use CURD as an internal execution substrate for larger agentic systems with policy enforcement.
+
+<Card title="Control Plane Interfaces" icon="building" href="/concepts/architecture">
+  CURD-CODEX, CURD-GPUI, CLI, REPL, and MCP on the same control plane
+</Card>
+
+## Learn More
+
+<CardGroup cols={3}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install CURD via package managers
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started in 5 minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the control plane
+  </Card>
+  <Card title="Commands" icon="terminal" href="/commands/search">
+    Explore all CLI commands
+  </Card>
+  <Card title=".curd Scripts" icon="scroll" href="/workflows/curd-scripts">
+    Author workflow automation
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/tools/overview">
+    Tool and DSL documentation
+  </Card>
+</CardGroup>

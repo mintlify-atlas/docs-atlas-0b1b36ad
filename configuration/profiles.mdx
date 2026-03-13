@@ -1,0 +1,373 @@
+---
+title: 'Profiles'
+description: 'Role-based capability gating and profile configuration'
+icon: 'user-group'
+---
+
+## Overview
+
+Profiles control **capability-based access** for humans and agents. Unlike the runtime ceiling (which is a hard cap), profiles define **fine-grained permissions** for specific operations.
+
+<Info>
+**Key Concept:** The runtime ceiling (`lite` vs `full`) is a strict limit, but profiles gate access to individual capabilities like `change.apply`, `exec.command`, or `hook.run`.
+</Info>
+
+## Profile vs Runtime Ceiling
+
+| Dimension | Runtime Ceiling | Profile |
+|-----------|----------------|----------|
+| **Scope** | Global cap | Per-role permissions |
+| **Override** | Cannot be bypassed | Can be elevated with approval |
+| **Use Case** | Safe read-only mode | Fine-grained RBAC |
+| **Example** | `lite` blocks all mutations | `planner` role lacks `change.apply` |
+
+Source: `curd-core/src/config.rs:62-88`, Architecture note from `source/AGENTS.md:19-30`
+
+## Profile Configuration
+
+Profiles are defined in the `[profiles]` section of `settings.toml`:
+
+```toml settings.toml
+[profiles.default]
+role = "human_core"
+capabilities = [
+  "lookup",
+  "traverse", 
+  "read",
+  "change.prepare",
+  "change.apply",
+  "exec.task"
+]
+session_required_for_change = true
+promotion = "user_only"
+disclosure_default = "l1"
+
+[profiles.ci_strict]
+role = "autonomous_agent"
+capabilities = ["lookup", "read", "plan.create"]
+allowed_tasks = ["test", "lint"]
+denied_groups = ["deploy", "publish"]
+require_approval_for = ["change.apply"]
+```
+
+## Profile Schema
+
+<ParamField path="role" type="string" default="human_core">
+  Human-readable role name. Valid roles:
+  
+  - `human_core`: Full access (default for humans)
+  - `planner`: Planning and read-only
+  - `reviewer`: Review and approve changes
+  - `observer`: Read-only observer
+  - `autonomous_agent`: Agent with restricted access
+</ParamField>
+
+<ParamField path="capabilities" type="array" default="[]">
+  List of capability atoms. Available capabilities:
+  
+  **Read Operations:**
+  - `lookup`: Symbol and file lookup
+  - `traverse`: Navigate file tree
+  - `read`: Read file contents
+  
+  **Change Operations:**
+  - `change.prepare`: Stage changes in shadow workspace
+  - `change.apply`: Commit changes to workspace
+  - `change.revert`: Rollback changes
+  
+  **Execution:**
+  - `exec.task`: Run build tasks
+  - `exec.command`: Execute shell commands
+  
+  **Planning:**
+  - `plan.create`: Create execution plans
+  - `plan.execute`: Run plans
+  - `plan.parallel`: Parallel plan execution
+  
+  **Sessions:**
+  - `session.begin`: Start transactional session
+  - `session.verify`: Verify session state
+  - `session.commit`: Commit session
+  - `session.rollback`: Rollback session
+  
+  **Advanced:**
+  - `plugin.manage`: Install/remove plugins
+  - `plugin.trust`: Manage trusted plugin keys
+  - `review.run`: Run semantic reviews
+  - `hook.run`: Execute hooks
+  - `context`: Access extended context
+</ParamField>
+
+Source: `curd-core/src/config.rs:332-356`
+
+<ParamField path="session_required_for_change" type="boolean" default="true">
+  If `true`, all mutations (`change.apply`, `exec.command`) require an active shadow workspace session.
+  
+  **Critical for safety:** Prevents agents from making changes outside transactional boundaries.
+</ParamField>
+
+<ParamField path="promotion" type="string" default="user_only">
+  Controls profile elevation. Valid values:
+  
+  - `forbidden`: Profile cannot be elevated
+  - `user_only`: Only humans can promote
+  - `approval_required`: Requires explicit approval workflow
+  - `policy_gated`: Promotion allowed if policy permits
+</ParamField>
+
+Source: `curd-core/src/config.rs:358-363`
+
+<ParamField path="allowed_tasks" type="array" default="[]">
+  Whitelist of tasks this profile can execute (e.g., `["test", "build"]`)
+</ParamField>
+
+<ParamField path="allowed_groups" type="array" default="[]">
+  Whitelist of tool groups this profile can access
+</ParamField>
+
+<ParamField path="denied_groups" type="array" default="[]">
+  Blacklist of tool groups explicitly denied
+</ParamField>
+
+<ParamField path="require_approval_for" type="array" default="[]">
+  List of capabilities requiring human approval before execution
+</ParamField>
+
+<ParamField path="disclosure_default" type="string" default="l1">
+  Default disclosure level for logging and audit trails
+</ParamField>
+
+<ParamField path="hook_permissions" type="array" default="[]">
+  List of hooks this profile is allowed to execute
+</ParamField>
+
+Source: `curd-core/src/config.rs:67-89`
+
+## Capability Enforcement
+
+CURD validates every tool call against the active profile:
+
+```rust
+// From curd-core/src/policy.rs:358-371
+if let Some(profile) = input.profile {
+    let required = capability_for_tool(input.tool);
+    if !profile.capabilities.iter().any(|cap| cap == required.as_str()) {
+        return PolicyDecision::Deny(
+            format!("PROFILE_DENIED: profile '{}' lacks capability '{}'", 
+                    profile_name, required)
+        );
+    }
+}
+```
+
+Source: `curd-core/src/policy.rs:358-395`
+
+### Session Requirement
+
+If `session_required_for_change` is `true`, mutations are blocked unless a session is active:
+
+```toml settings.toml
+[profiles.supervised]
+capabilities = ["change.apply"]
+session_required_for_change = true  # MANDATORY sessions
+```
+
+**Enforcement:**
+
+```rust
+// From curd-core/src/policy.rs:373-384
+if profile.session_required_for_change
+    && matches!(op, CanonicalOperationKind::Change | CanonicalOperationKind::Exec)
+    && !session_open
+{
+    return PolicyDecision::Deny(
+        "SESSION_REQUIRED: profile requires an open session for change/exec operations."
+    );
+}
+```
+
+Source: `curd-core/src/policy.rs:373-384`
+
+<Warning>
+**Critical Safety Invariant:** Agents MUST open a session via `workspace(action: 'begin')` before any state-mutating operation. This ensures all changes are transactional and can be rolled back.
+
+See `source/AGENTS.md:101-106` for the full contract.
+</Warning>
+
+## Built-in Profiles
+
+CURD recognizes these standard profiles:
+
+### `human_core` (Default Human)
+
+```toml
+[profiles.human_core]
+role = "human_core"
+capabilities = [
+  "lookup", "traverse", "read",
+  "change.prepare", "change.apply", "change.revert",
+  "exec.task", "exec.command",
+  "session.begin", "session.commit", "session.rollback",
+  "plan.create", "plan.execute",
+  "plugin.manage", "plugin.trust"
+]
+session_required_for_change = false  # Humans can work outside sessions
+promotion = "user_only"
+```
+
+### `planner` (Default Agent)
+
+```toml
+[profiles.planner]
+role = "planner"
+capabilities = [
+  "lookup", "traverse", "read",
+  "plan.create"
+]
+session_required_for_change = true
+promotion = "approval_required"
+```
+
+### `autonomous_agent`
+
+```toml
+[profiles.autonomous_agent]
+role = "autonomous_agent"
+capabilities = [
+  "lookup", "traverse", "read",
+  "change.prepare", "change.apply",
+  "exec.task",
+  "session.begin", "session.commit"
+]
+session_required_for_change = true
+promotion = "policy_gated"
+require_approval_for = ["change.apply"]
+```
+
+### `reviewer`
+
+```toml
+[profiles.reviewer]
+role = "reviewer"
+capabilities = [
+  "lookup", "traverse", "read",
+  "review.run",
+  "session.verify"
+]
+session_required_for_change = true
+promotion = "forbidden"
+```
+
+### `observer`
+
+```toml
+[profiles.observer]
+role = "observer"
+capabilities = ["lookup", "traverse", "read"]
+session_required_for_change = true
+promotion = "forbidden"
+disclosure_default = "l3"  # Higher disclosure for audit
+```
+
+## Profile Interaction with Policy
+
+Profiles and policy work together:
+
+1. **Runtime Ceiling**: Hard cap (e.g., `lite` blocks all mutations)
+2. **Profile Capabilities**: Fine-grained access control
+3. **Policy Rules**: Additional restrictions (blocklists, allowed binaries, etc.)
+
+**Decision Flow:**
+
+```
+Tool Call
+  ↓
+✓ Runtime Ceiling Check (lite vs full)
+  ↓
+✓ Profile Capability Check (does profile have required capability?)
+  ↓
+✓ Policy Evaluation (blocklists, allowlists, sandbox validation)
+  ↓
+Allow / Deny
+```
+
+Source: `curd-core/src/policy.rs:189-403`
+
+## Example: Multi-Tier Profile Setup
+
+```toml settings.toml
+# Owner: Full access
+[profiles.owner]
+role = "human_core"
+capabilities = ["lookup", "traverse", "read", "change.apply", "exec.command", "plugin.manage"]
+session_required_for_change = false
+promotion = "user_only"
+
+# Editor: Can prepare changes, needs approval for apply
+[profiles.editor]
+role = "planner"
+capabilities = ["lookup", "traverse", "read", "change.prepare", "session.begin"]
+require_approval_for = ["change.apply"]
+session_required_for_change = true
+promotion = "approval_required"
+
+# CI Agent: Automated testing only
+[profiles.ci]
+role = "autonomous_agent"
+capabilities = ["lookup", "read", "exec.task"]
+allowed_tasks = ["test", "lint", "typecheck"]
+denied_groups = ["deploy"]
+session_required_for_change = true
+promotion = "forbidden"
+
+# Read-only reviewer
+[profiles.auditor]
+role = "observer"
+capabilities = ["lookup", "traverse", "read", "review.run"]
+session_required_for_change = true
+promotion = "forbidden"
+disclosure_default = "l3"
+```
+
+## CLI Usage
+
+Select a profile when running commands:
+
+```bash
+# Use specific profile
+curd run --profile ci_strict
+
+# Override default profile
+export CURD_PROFILE=editor
+curd workspace begin
+```
+
+## Validation
+
+CURD validates profiles on load:
+
+```bash
+curd doctor . --strict
+```
+
+**Common Errors:**
+
+- `config_profile_capability_invalid`: Unknown capability atom
+- `config_profile_promotion_invalid`: Invalid promotion mode
+- `PROFILE_DENIED`: Tool requires capability not granted to profile
+
+Source: `curd-core/src/config.rs:562-585`
+
+## See Also
+
+<CardGroup cols={3}>
+  <Card title="Settings" icon="sliders" href="/configuration/settings">
+    Core configuration options
+  </Card>
+  <Card title="Policy" icon="shield" href="/configuration/policy">
+    Security enforcement rules
+  </Card>
+  <Card title="Runtime Modes" icon="gauge" href="/configuration/settings#runtime-configuration">
+    Lite vs Full ceiling
+  </Card>
+</CardGroup>

@@ -1,0 +1,377 @@
+---
+title: 'curd workspace'
+description: 'Initialize, configure, and manage CURD workspaces'
+---
+
+## Overview
+
+Workspace commands manage CURD's integration with your codebase, including initialization, configuration, status monitoring, and lifecycle operations.
+
+## Commands
+
+### curd init
+
+Initialize a CURD workspace in the current directory.
+
+**Syntax:**
+```bash
+curd init [ROOT]
+```
+
+**Alias:** `ini`
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+**Behavior:**
+- Auto-detects build system (Cargo, npm, Make, etc.)
+- Creates `.curd/` directory structure
+- Generates default `settings.toml`
+- Initializes empty shadow store
+- Sets up index cache
+
+**Example:**
+```bash
+# Initialize in current directory
+curd init
+
+# Initialize a specific directory
+curd init ~/projects/myapp
+```
+
+---
+
+### curd status
+
+Print a summary of workspace state including index stats and shadow changes.
+
+**Syntax:**
+```bash
+curd status [ROOT]
+```
+
+**Aliases:** `st`, `sts`
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+**Output:**
+```
+=== CURD Workspace Status ===
+
+[Index]
+  Files Scanned: 1247
+  Cache Hits:    892
+  Parse Fail:    3
+  No Symbols:    12
+  Build Time:    1842ms
+
+[Shadow Store: ACTIVE]
+  Staged Files:
+    - src/main.rs
+    - src/api.rs
+  
+  Run `curd session commit` to apply.
+```
+
+**Example:**
+```bash
+curd status
+curd status --root ~/projects/myapp
+```
+
+---
+
+### curd detach
+
+Soft detach CURD from the workspace (removes hooks, preserves data).
+
+**Syntax:**
+```bash
+curd detach [OPTIONS] [ROOT]
+```
+
+**Alias:** `det`
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+<ParamField path="--shadow" type="enum">
+  How to handle active shadow transaction:
+  - `commit` - Commit changes before detaching
+  - `rollback` - Discard changes before detaching
+  - `abort` - Cancel detach if shadow is active (default)
+</ParamField>
+
+**Behavior:**
+- Removes git hooks
+- Cleans up shell integration
+- Preserves `.curd/` directory
+- Handles active shadow transactions per `--shadow` flag
+
+**Example:**
+```bash
+# Detach (prompts if shadow active)
+curd detach
+
+# Detach and commit pending changes
+curd detach --shadow commit
+
+# Detach and rollback pending changes
+curd detach --shadow rollback
+```
+
+---
+
+### curd delete
+
+Permanently delete CURD from workspace (removes `.curd/` directory).
+
+**Syntax:**
+```bash
+curd delete [OPTIONS] [ROOT]
+```
+
+**Alias:** `del`
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+<ParamField path="--yes" type="boolean" default="false">
+  Skip confirmation prompt
+</ParamField>
+
+<ParamField path="--shadow" type="enum">
+  How to handle active shadow transaction (same as `detach`)
+</ParamField>
+
+**Behavior:**
+- Prompts for confirmation (unless `--yes`)
+- Runs `detach` steps first
+- Removes entire `.curd/` directory
+- Deletes index, history, shadow store, and all traces
+
+**Example:**
+```bash
+# Delete with confirmation
+curd delete
+
+# Force delete without prompt
+curd delete --yes
+
+# Delete and commit pending changes first
+curd delete --shadow commit --yes
+```
+
+---
+
+### curd log
+
+Tail the agent's mutation and execution history.
+
+**Syntax:**
+```bash
+curd log [OPTIONS] [ROOT]
+```
+
+<ParamField path="root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+<ParamField path="--limit" type="integer" default="10">
+  Number of recent entries to show
+</ParamField>
+
+**Output:**
+```
+Timestamp: 1710432890
+Collab:    session-abc123
+Operation: edit
+Input:
+{
+  "uri": "src/main.rs::handle_request",
+  "action": "upsert",
+  "code": "pub fn handle_request() { }"
+}
+
+Output:
+{
+  "message": "Symbol updated"
+}
+--------------------------------------------------
+```
+
+**Example:**
+```bash
+# Show last 10 operations
+curd log
+
+# Show last 50 operations
+curd log --limit 50
+```
+
+---
+
+## Common Workflows
+
+### Initial Setup
+
+```bash
+# Initialize workspace
+cd ~/projects/myapp
+curd init
+
+# Build index
+curd doctor
+
+# Verify setup
+curd status
+curd test all
+```
+
+### Monitoring Active Development
+
+```bash
+# Check workspace state
+curd status
+
+# Review recent changes
+curd log --limit 20
+
+# Inspect shadow transaction
+curd session review
+```
+
+### Clean Removal
+
+```bash
+# Option 1: Detach (preserve data)
+curd detach
+
+# Option 2: Full deletion
+curd delete --yes
+```
+
+### Workspace Migration
+
+```bash
+# Old workspace
+curd detach --shadow commit
+
+# New workspace
+cd ~/projects/new-location
+curd init
+```
+
+## Directory Structure
+
+After initialization:
+
+```
+workspace/
+├── .curd/
+│   ├── settings.toml        # Configuration
+│   ├── index.db             # Symbol index
+│   ├── shadow/              # Transaction store
+│   │   └── root/            # Shadow workspace
+│   ├── traces/              # Audit logs
+│   ├── plans/               # Saved plans (.json)
+│   └── plugins/             # Installed plugins
+├── src/
+└── ...
+```
+
+## Configuration Files
+
+### settings.toml
+
+Generated by `curd init`:
+
+```toml
+[index]
+mode = "lazy"            # lazy | full
+scope = "auto"           # auto | forced
+max_file_size = 1048576  # 1MB
+large_file_policy = "skeleton"  # skip | skeleton | full
+execution = "multithreaded"    # singlethreaded | multithreaded | multiprocess
+
+[policy.files]
+allowed_patterns = ["**/*"]
+blocked_patterns = [".curd/**", "node_modules/**"]
+
+[policy.exec]
+allow_background = false
+timeout_seconds = 300
+
+[profiles.default]
+access_fs_read = true
+access_fs_write = true
+access_exec = true
+access_network = false
+```
+
+Modify via:
+```bash
+curd config set index.mode full
+curd config show
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Init fails: directory exists">
+    CURD is already initialized:
+    ```bash
+    # Check status
+    curd status
+    
+    # Or reinitialize (deletes existing)
+    curd delete --yes
+    curd init
+    ```
+  </Accordion>
+
+  <Accordion title="Status shows 'No index'">
+    Build the index:
+    ```bash
+    curd doctor
+    ```
+  </Accordion>
+
+  <Accordion title="Cannot detach: shadow active">
+    Resolve the shadow transaction:
+    ```bash
+    # Option 1: Commit
+    curd session commit
+    curd detach
+    
+    # Option 2: Rollback
+    curd session rollback
+    curd detach
+    
+    # Option 3: Force with flag
+    curd detach --shadow rollback
+    ```
+  </Accordion>
+
+  <Accordion title="Log is empty">
+    No operations recorded yet:
+    - Agent hasn't made mutations
+    - No MCP tool calls executed
+    - Logs may be in different session:
+      ```bash
+      curd session log
+      ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd config](/configuration/settings) - Configuration management
+- [curd session](/commands/session) - Shadow transactions
+- [curd doctor](/commands/test) - Diagnostics and indexing
+- [curd test](/commands/test) - Integrity verification

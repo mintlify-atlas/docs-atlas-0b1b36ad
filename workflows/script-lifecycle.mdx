@@ -1,0 +1,373 @@
+---
+title: "Script Lifecycle"
+description: "The check, compile, edit, and execute workflow"
+icon: "rotate"
+---
+
+CURD scripts follow a four-stage lifecycle that separates planning from execution. This enables graph-aware impact analysis before any mutation occurs.
+
+## Lifecycle overview
+
+```
+┌──────┐    ┌─────────┐    ┌──────┐    ┌─────────┐
+│ Check│ -> │ Compile │ -> │ Edit │ -> │ Execute │
+└──────┘    └─────────┘    └──────┘    └─────────┘
+   ↓             ↓            ↓            ↓
+ Validate    Generate      Refine       Mutate
+  impact     artifact    safeguards   workspace
+```
+
+Each stage serves a specific purpose in the workflow.
+
+## Stage 1: Check
+
+**Purpose**: Validate the script and analyze impact without mutation.
+
+```bash
+curd run check fix_auth.curd
+```
+
+This command:
+
+- Compiles the script (but doesn't save the artifact)
+- Reports resolved targets and impact
+- Identifies conflict risks
+- Shows session requirements
+- Suggests safeguards
+
+<Tip>
+Check is the step that turns a script from **"idea"** into **"something you can reason about"**.
+</Tip>
+
+### What check reports
+
+<AccordionGroup>
+  <Accordion title="Resolved targets" icon="bullseye">
+    Which files, functions, or modules will be affected:
+    
+    ```
+    Targets:
+    - src/auth.rs::validate
+    - src/auth.rs::types::Token
+    ```
+  </Accordion>
+
+  <Accordion title="Graph-adjacent impact" icon="diagram-project">
+    What else might be affected through dependencies:
+    
+    ```
+    Impact analysis:
+    - Direct: src/auth.rs::validate
+    - Callers: src/api/handlers.rs::login
+    - Dependencies: src/auth.rs::types::Token
+    ```
+  </Accordion>
+
+  <Accordion title="Conflict risk" icon="triangle-exclamation">
+    Potential conflicts with uncommitted changes:
+    
+    ```
+    Conflicts:
+    ⚠ src/auth.rs has uncommitted changes
+    ```
+  </Accordion>
+
+  <Accordion title="Session requirement" icon="circle-check">
+    Whether a workspace session is needed:
+    
+    ```
+    Session: required (mutating operation)
+    ```
+  </Accordion>
+
+  <Accordion title="Suggested safeguards" icon="shield">
+    Recommended safety policies:
+    
+    ```
+    Recommendations:
+    - Use atomic block for edit + verify
+    - Consider stricter profile for production
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+Check **does not mutate** anything. It's safe to run repeatedly during development.
+</Note>
+
+## Stage 2: Compile
+
+**Purpose**: Generate a plan artifact for execution.
+
+```bash
+curd run compile fix_auth.curd
+```
+
+This command:
+
+- Compiles the script into a plan artifact
+- Saves it to `.curd/plans/<plan-id>.json`
+- Binds argument values
+- Captures explainability metadata
+- Sets default safeguards
+
+### Passing arguments
+
+If your script has arguments:
+
+```curd
+arg target_uri: string
+arg strict: bool = true
+```
+
+Pass them at compile time:
+
+```bash
+curd run compile fix.curd --target-uri src/lib.rs::alpha
+```
+
+### Artifact contents
+
+The compiled artifact contains:
+
+- **Compiled DSL/plan payload**: Execution graph
+- **Source hash**: Content fingerprint of the `.curd` file
+- **Source path**: Original script location
+- **Bound arguments**: Concrete values for all parameters
+- **Explainability metadata**: Structured comments from the script
+- **Safeguards**: Execution limits and policies
+- **Runtime ceiling**: Profile and mode constraints
+
+<CardGroup cols={2}>
+  <Card title="View artifacts" icon="folder-open">
+    List compiled plans:
+    ```bash
+    curd plan list
+    ```
+  </Card>
+  
+  <Card title="Inspect artifact" icon="eye">
+    View plan details:
+    ```bash
+    curd plan show <plan-id>
+    ```
+  </Card>
+</CardGroup>
+
+## Stage 3: Edit (optional)
+
+**Purpose**: Refine safeguards and execution posture.
+
+```bash
+curd plan edit <plan-id>
+```
+
+This guided editor lets you adjust:
+
+### Profile
+
+Switch to a stricter or more permissive profile:
+
+```bash
+# Change from default to ci_strict
+Profile: ci_strict
+```
+
+This affects:
+- Available tools
+- Filesystem boundaries
+- Execution permissions
+
+### Output limits
+
+Control how much output each step can produce:
+
+```bash
+# Set default limit
+Default output_limit: 10KB
+
+# Override for specific node
+Node "read_large_file" output_limit: 100KB
+```
+
+### Retry limits
+
+Configure failure retry behavior:
+
+```bash
+# Set default retry count
+Default retry_limit: 3
+
+# Override for specific node
+Node "flaky_api_call" retry_limit: 5
+```
+
+<Tip>
+This is where teams add **stronger execution posture** for production environments:
+
+- Use stricter profiles for CI/CD
+- Lower output budgets to prevent resource exhaustion
+- Adjust retries for different failure modes
+</Tip>
+
+## Stage 4: Execute
+
+**Purpose**: Run the compiled plan artifact.
+
+### For mutating scripts
+
+Wrap execution in a workspace session:
+
+```bash
+curd workspace begin
+curd run fix_auth.curd
+curd workspace commit
+```
+
+Or use the plan artifact directly:
+
+```bash
+curd workspace begin
+curd plan execute <plan-id>
+curd workspace commit
+```
+
+<Warning>
+**Mutating operations require a workspace session.** The transaction model ensures:
+
+- All changes go to the shadow workspace first
+- You can review changes with `curd workspace diff`
+- Commit applies changes atomically
+- Rollback discards all changes
+</Warning>
+
+### Discarding execution
+
+If something goes wrong or you change your mind:
+
+```bash
+curd workspace rollback
+```
+
+This cleans up the shadow workspace without touching your files.
+
+### For read-only scripts
+
+If your script only reads data (no mutations):
+
+```bash
+curd run analyze_deps.curd
+```
+
+No workspace session needed.
+
+## Complete workflow example
+
+Here's a full lifecycle for a refactoring script:
+
+### 1. Check impact first
+
+```bash
+$ curd run check refactor_auth.curd
+
+Targets:
+  - src/auth.rs::validate
+  - src/auth.rs::types::Token
+
+Impact:
+  - Callers: src/api/handlers.rs::login (direct)
+  - Tests: tests/auth_tests.rs::test_validate
+
+Session: required
+
+Recommendations:
+  - Use atomic block for safety
+  - Run tests after execution
+```
+
+### 2. Compile to artifact
+
+```bash
+$ curd run compile refactor_auth.curd
+
+Compiled plan artifact:
+  ID: refactor-auth-20240315-1830
+  Location: .curd/plans/refactor-auth-20240315-1830.json
+```
+
+### 3. Edit for production
+
+```bash
+$ curd plan edit refactor-auth-20240315-1830
+
+Profile: ci_strict
+Default output_limit: 10KB
+Default retry_limit: 1
+
+Saved.
+```
+
+### 4. Execute in session
+
+```bash
+$ curd workspace begin
+Workspace session started.
+
+$ curd run refactor_auth.curd
+Executing plan: refactor-auth-20240315-1830
+✓ read src/auth.rs
+✓ edit src/auth.rs::validate
+✓ verify_impact
+Completed successfully.
+
+$ curd workspace diff
+Modified files:
+  M src/auth.rs
+
+$ curd workspace commit
+Committed 1 file.
+```
+
+## Iterating on scripts
+
+During development, iterate quickly with check:
+
+```bash
+# Edit script
+vim fix_auth.curd
+
+# Check impact
+curd run check fix_auth.curd
+
+# Edit again
+vim fix_auth.curd
+
+# Check again
+curd run check fix_auth.curd
+
+# When satisfied, compile and execute
+curd run compile fix_auth.curd
+curd workspace begin
+curd run fix_auth.curd
+curd workspace commit
+```
+
+<Tip>
+Use **check** liberally during development. It's fast and safe, giving you immediate feedback without risk.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title=".curd scripts" icon="scroll" href="/workflows/curd-scripts">
+    Learn the script syntax
+  </Card>
+  
+  <Card title="Plan artifacts" icon="file-contract" href="/workflows/plan-artifacts">
+    Understand compiled execution contracts
+  </Card>
+  
+  <Card title="Examples" icon="code" href="/workflows/examples">
+    See complete workflow patterns
+  </Card>
+</CardGroup>

@@ -1,0 +1,255 @@
+---
+title: 'Statements'
+description: 'DSL statements: arg, let, use, and tool calls'
+---
+
+## Statement Types
+
+CURD DSL supports four types of statements:
+
+1. **Argument declarations** (`arg`)
+2. **Variable bindings** (`let`)
+3. **Context directives** (`use`)
+4. **Tool-call statements**
+
+## Argument Declarations
+
+Arguments make scripts reusable by parameterizing values. Arguments can have default values.
+
+### Syntax
+
+```curd
+arg <name>: <type>
+arg <name>: <type> = <default_value>
+```
+
+### Supported Types
+
+- `string`
+- `bool`
+- `int`
+- `float`
+
+### Examples
+
+```curd
+# Required argument
+arg target_uri: string
+
+# Optional argument with default
+arg strict: bool = true
+arg timeout: int = 30
+arg threshold: float = 0.95
+```
+
+### Usage
+
+Reference arguments using `$` prefix:
+
+```curd
+arg target_uri: string
+arg strict: bool = true
+
+let patch = """
+pub fn alpha() {}
+"""
+
+edit uri=$target_uri action="upsert" code=$patch
+verify_impact strict=$strict
+```
+
+### Binding at Compile Time
+
+Provide argument values when compiling or checking:
+
+```bash
+curd run check fix.curd --target-uri src/lib.rs::alpha
+curd run compile fix.curd --target-uri src/lib.rs::alpha --strict false
+```
+
+<Info>
+  Each bound argument set produces a different concrete plan artifact. This enables one source script to generate multiple execution plans.
+</Info>
+
+## Variable Bindings
+
+The `let` statement binds values to variables for reuse within the script.
+
+### Syntax
+
+```curd
+let <name> = <value>
+let <name> = """<multiline_string>"""
+```
+
+### Simple Bindings
+
+```curd
+let author = "system"
+let max_retries = 3
+let enabled = true
+```
+
+### Multiline Strings
+
+Use triple quotes (`"""`) for multiline content like code patches:
+
+```curd
+let patch = """
+pub fn validate(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    // Additional validation logic
+    true
+}
+"""
+
+edit uri="src/auth.rs::validate" action="upsert" code=$patch
+```
+
+<Note>
+  Multiline strings preserve formatting, making them ideal for code patches, SQL queries, or any multi-line content.
+</Note>
+
+### Variable References
+
+Reference variables using `$` prefix:
+
+```curd
+let module_name = "auth"
+let target = "src/" + $module_name + ".rs"
+
+edit uri=$target action="upsert" code=$patch
+```
+
+## Context Directives
+
+The `use` statement declares runtime context requirements.
+
+### Syntax
+
+```curd
+use profile <profile_name>
+use session <requirement>
+```
+
+### Profile Selection
+
+Specify which profile governs tool capabilities:
+
+```curd
+use profile ci_strict
+
+# Rest of script runs under ci_strict profile constraints
+edit uri="src/lib.rs" action="upsert" code=$patch
+```
+
+### Session Requirements
+
+Declare session requirements explicitly:
+
+```curd
+use session required
+
+# This script requires an active workspace session
+edit uri="src/auth.rs::validate" action="upsert" code=$patch
+```
+
+<Warning>
+  Scripts that mutate code must run within an active workspace session. Use `curd workspace begin` before execution.
+</Warning>
+
+## Tool-Call Statements
+
+Tool-call statements invoke CURD tools with named parameters.
+
+### Syntax
+
+```curd
+<tool_name> <param1>=<value1> <param2>=<value2> ...
+```
+
+### Examples
+
+```curd
+# Edit operation
+edit uri="src/lib.rs::alpha" action="upsert" code=$patch
+
+# Search operation
+search query="validate" scope="function"
+
+# Impact verification
+verify_impact strict=true
+
+# Read operation
+read uri="src/auth.rs"
+```
+
+### Parameter Types
+
+Parameters can be:
+
+- **Literals**: `strict=true`, `action="upsert"`, `count=5`
+- **Variable references**: `code=$patch`, `uri=$target_uri`
+- **Expressions**: Combined values and references
+
+### Quoting Rules
+
+- Use double quotes for string literals: `action="upsert"`
+- No quotes for booleans: `strict=true`, `enabled=false`
+- No quotes for numbers: `count=5`, `threshold=0.95`
+- Variable references start with `$`: `code=$patch`
+
+## Complete Example
+
+```curd
+# Script to update function validation logic
+arg target_module: string
+arg enable_strict: bool = true
+
+use session required
+use profile default
+
+let validation_code = """
+pub fn validate(input: &str) -> Result<(), Error> {
+    if input.is_empty() {
+        return Err(Error::Empty);
+    }
+    Ok(())
+}
+"""
+
+let target_uri = "src/" + $target_module + ".rs::validate"
+
+sequence {
+  # First, read the current implementation
+  read uri=$target_uri
+  
+  # Apply the update
+  edit uri=$target_uri action="upsert" code=$validation_code
+  
+  # Verify impact
+  verify_impact strict=$enable_strict
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use arguments for reusability">
+    Parameterize values that change between executions. This allows one script to serve multiple use cases.
+  </Accordion>
+  
+  <Accordion title="Prefer let for complex values">
+    Extract multiline strings and repeated values into `let` bindings for better readability.
+  </Accordion>
+  
+  <Accordion title="Declare session requirements early">
+    Place `use session required` at the top of scripts that mutate code to make requirements explicit.
+  </Accordion>
+  
+  <Accordion title="Use meaningful variable names">
+    Choose descriptive names for arguments and variables: `target_uri` over `t`, `validation_code` over `code`.
+  </Accordion>
+</AccordionGroup>

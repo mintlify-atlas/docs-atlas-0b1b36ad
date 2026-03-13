@@ -1,0 +1,638 @@
+---
+title: "Tool Plugins"
+description: "Extend CURD with custom native tools through .curdt packages"
+---
+
+Tool plugins (`.curdt` packages) extend CURD with signed, sandboxed sidecar tools. They allow you to add custom capabilities while maintaining strict security boundaries through subprocess isolation and the `json_stdio_v1` protocol.
+
+## What Tool Plugins Provide
+
+A `.curdt` package includes:
+
+<CardGroup cols={2}>
+  <Card title="Custom Tool Executable" icon="terminal">
+    Native binary or script that implements your custom logic
+  </Card>
+  <Card title="Documentation Metadata" icon="book">
+    Agent usage guidance, parameters, and examples for discoverability
+  </Card>
+  <Card title="Sandboxed Execution" icon="shield-halved">
+    Runs as isolated subprocess with workspace confinement and resource limits
+  </Card>
+  <Card title="JSON Protocol" icon="brackets-curly">
+    Communicates via single-object JSON stdin/stdout for clean integration
+  </Card>
+</CardGroup>
+
+## Package Structure
+
+A typical tool plugin payload:
+
+```text
+payload/
+  bin/
+    acme-tool           # Executable (native binary or script)
+  lib/                  # Optional supporting libraries
+    helper.so
+```
+
+### Manifest Template
+
+Here's the structure for a `.curdt` manifest:
+
+```json
+{
+  "manifest": {
+    "schema_version": 1,
+    "package_id": "acme-proprietary-toolkit",
+    "version": "0.1.0",
+    "kind": "tool",
+    "signer_pubkey_hex": "REPLACE_WITH_ED25519_PUBKEY_HEX",
+    "description": "ACME deployment control plane tool",
+    "files": [
+      {
+        "path": "bin/acme-tool",
+        "sha256": "REPLACE_WITH_SHA256",
+        "size": 12345,
+        "executable": true
+      }
+    ],
+    "tool": {
+      "tool_name": "acme_tool",
+      "executable_path": "bin/acme-tool",
+      "default_args": [],
+      "protocol": "json_stdio_v1",
+      "agent_usage": "Use this tool when interacting with Acme's proprietary deployment control plane.",
+      "review_guidance": "Human reviewers should inspect deployment target, blast radius, and safety flags before approving use in plans.",
+      "downstream_impact": "May trigger deployment-oriented downstream automation and environment-specific rollouts.",
+      "description": "Acme deployment tool exposed to CURD as a signed sandboxed tool plugin.",
+      "parameters": [
+        {
+          "name": "environment",
+          "kind": "string",
+          "description": "Deployment environment identifier.",
+          "required": true
+        },
+        {
+          "name": "action",
+          "kind": "string",
+          "description": "Requested deployment action.",
+          "required": true
+        }
+      ],
+      "examples": [
+        {
+          "label": "Queue a staging deploy",
+          "arguments": {
+            "environment": "staging",
+            "action": "deploy"
+          }
+        }
+      ]
+    },
+    "language": null
+  },
+  "payload_files": [
+    {
+      "path": "bin/acme-tool",
+      "content_b64": "REPLACE_WITH_BASE64_PAYLOAD",
+      "executable": true
+    }
+  ],
+  "signature_hex": "REPLACE_WITH_SIGNATURE_OVER_MANIFEST_JSON"
+}
+```
+
+## Tool Specification Fields
+
+<ParamField path="tool_name" type="string" required>
+  Unique tool identifier (alphanumeric, underscores only)
+  
+  Example: `"acme_tool"`, `"my_deploy"`, `"custom_check"`
+  
+  **Cannot conflict with built-in CURD tools** like `search`, `edit`, `workspace`, etc.
+</ParamField>
+
+<ParamField path="executable_path" type="string" required>
+  Relative path to the tool executable within the package
+  
+  Example: `"bin/acme-tool"`
+  
+  Must have `executable: true` in the corresponding `files` entry
+</ParamField>
+
+<ParamField path="default_args" type="array<string>">
+  Optional default arguments passed to the executable on every invocation
+  
+  Example: `["--workspace", "$WORKSPACE"]`
+</ParamField>
+
+<ParamField path="protocol" type="string" required>
+  Communication protocol (must be `"json_stdio_v1"`)
+  
+  This is the only supported protocol. The tool must:
+  - Read exactly one JSON object from stdin
+  - Write exactly one JSON object to stdout
+  - Avoid extra logging or framing on stdout
+</ParamField>
+
+<ParamField path="agent_usage" type="string">
+  Guidance for AI agents on when and how to use this tool
+  
+  Example: `"Use when deploying to production environments. Requires approval."`
+</ParamField>
+
+<ParamField path="review_guidance" type="string">
+  Instructions for human reviewers evaluating tool usage in plans
+  
+  Example: `"Check deployment target and verify rollback plan is documented."`
+</ParamField>
+
+<ParamField path="downstream_impact" type="string">
+  Description of side effects and external system changes
+  
+  Example: `"Triggers CI/CD pipeline and notifies on-call team."`
+</ParamField>
+
+<ParamField path="description" type="string">
+  Human-readable description of tool functionality
+</ParamField>
+
+<ParamField path="parameters" type="array<object>">
+  Tool parameter specifications for documentation and validation
+  
+  Each parameter includes:
+  - `name`: Parameter identifier
+  - `kind`: Type hint (`string`, `integer`, `boolean`, `object`, etc.)
+  - `description`: Parameter documentation
+  - `required`: Whether the parameter is mandatory
+</ParamField>
+
+<ParamField path="examples" type="array<object>">
+  Example invocations for documentation and testing
+  
+  Each example includes:
+  - `label`: Description of the example
+  - `arguments`: Sample JSON arguments object
+</ParamField>
+
+## Installation Process
+
+When you install a `.curdt` package:
+
+<Steps>
+  <Step title="Verification">
+    CURD verifies the archive extension, manifest kind, payload hashes, and Ed25519 signature
+  </Step>
+  
+  <Step title="Tool Name Check">
+    Ensures the tool name doesn't conflict with built-in CURD tools
+  </Step>
+  
+  <Step title="Extraction">
+    The payload is extracted to `.curd/plugins/tool/<package_id>/`
+    
+    Example:
+    ```
+    .curd/
+      plugins/
+        tool/
+          acme-proprietary-toolkit/
+            bin/
+              acme-tool
+            manifest.json
+            installed.json
+    ```
+  </Step>
+  
+  <Step title="Executable Permissions">
+    Files marked `executable: true` receive `0755` permissions on Unix systems
+  </Step>
+  
+  <Step title="Registry Update">
+    Tool metadata is recorded for MCP/native tool discovery
+  </Step>
+</Steps>
+
+## Runtime Contract
+
+Tool plugins must implement the `json_stdio_v1` protocol:
+
+### Input (stdin)
+
+CURD sends a single JSON object:
+
+```json
+{
+  "environment": "staging",
+  "action": "deploy",
+  "options": {
+    "dry_run": true
+  }
+}
+```
+
+### Output (stdout)
+
+The tool must respond with a single JSON object:
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "deployment_id": "deploy-12345",
+    "url": "https://staging.acme.com/deploy/12345"
+  }
+}
+```
+
+Or on error:
+
+```json
+{
+  "status": "error",
+  "error": "Invalid environment: must be one of [staging, production]"
+}
+```
+
+### Rules
+
+<Warning>
+  **Critical Requirements**:
+  
+  - Read exactly **one** JSON object from stdin
+  - Write exactly **one** JSON object to stdout
+  - Do **not** write extra log messages, debug output, or framing to stdout
+  - Use stderr for diagnostic logging (will be captured separately)
+  - Exit with code 0 on success, non-zero on error
+</Warning>
+
+## Sandboxing and Enforcement
+
+CURD enforces strict security boundaries:
+
+### Subprocess Isolation
+
+<AccordionGroup>
+  <Accordion title="Filesystem Confinement" icon="folder-tree">
+    - Tools run with `cwd` set to the workspace root
+    - Filesystem access is restricted to workspace boundaries
+    - Cannot access parent directories or arbitrary paths
+  </Accordion>
+  
+  <Accordion title="Resource Limits" icon="gauge-high">
+    - Timeout enforcement (configurable in policy)
+    - Memory limits (platform-dependent)
+    - Output size limits to prevent abuse
+  </Accordion>
+  
+  <Accordion title="Network Access" icon="network-wired">
+    - No network access by default
+    - Sandboxing uses platform-specific mechanisms:
+      - Linux: `bwrap` (bubblewrap)
+      - macOS: `sandbox-exec`
+      - Docker: container isolation
+  </Accordion>
+  
+  <Accordion title="Entrypoint Validation" icon="door-closed">
+    - Executable path must stay within install directory
+    - No symlink following outside package boundaries
+    - Path traversal attempts are rejected
+  </Accordion>
+</AccordionGroup>
+
+See [sandbox.rs:plugin_packages.rs](https://github.com/aerospeedsta/curd/blob/main/curd-core/src/sandbox.rs) for implementation details.
+
+## Creating a Tool Plugin
+
+### 1. Implement the Tool
+
+Create an executable that follows the `json_stdio_v1` protocol:
+
+<CodeGroup>
+
+```python Python Example
+#!/usr/bin/env python3
+import json
+import sys
+
+def main():
+    # Read input
+    try:
+        args = json.load(sys.stdin)
+    except json.JSONDecodeError as e:
+        print(json.dumps({
+            "status": "error",
+            "error": f"Invalid JSON input: {e}"
+        }))
+        sys.exit(1)
+    
+    # Process request
+    environment = args.get("environment")
+    action = args.get("action")
+    
+    if not environment or not action:
+        print(json.dumps({
+            "status": "error",
+            "error": "Missing required parameters: environment, action"
+        }))
+        sys.exit(1)
+    
+    # Do work (use stderr for logging!)
+    sys.stderr.write(f"Deploying to {environment}...\n")
+    
+    # Return result
+    print(json.dumps({
+        "status": "ok",
+        "result": {
+            "deployment_id": "deploy-12345",
+            "environment": environment,
+            "action": action
+        }
+    }))
+
+if __name__ == "__main__":
+    main()
+```
+
+```bash Shell Script Example
+#!/bin/bash
+
+# Read JSON from stdin
+INPUT=$(cat)
+
+# Parse with jq (or use a JSON parser)
+ENVIRONMENT=$(echo "$INPUT" | jq -r '.environment')
+ACTION=$(echo "$INPUT" | jq -r '.action')
+
+# Validate
+if [ -z "$ENVIRONMENT" ] || [ -z "$ACTION" ]; then
+  echo '{"status":"error","error":"Missing required parameters"}'
+  exit 1
+fi
+
+# Do work (log to stderr!)
+echo "Deploying to $ENVIRONMENT..." >&2
+
+# Return result
+echo '{"status":"ok","result":{"deployment_id":"deploy-12345"}}'
+```
+
+```rust Rust Example
+use std::io::{self, Read};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Deserialize)]
+struct Input {
+    environment: String,
+    action: String,
+}
+
+#[derive(Serialize)]
+struct Output {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn main() {
+    let mut buffer = String::new();
+    io::stdin().read_to_string(&mut buffer).unwrap();
+    
+    let input: Input = match serde_json::from_str(&buffer) {
+        Ok(i) => i,
+        Err(e) => {
+            let output = Output {
+                status: "error".to_string(),
+                result: None,
+                error: Some(format!("Invalid input: {}", e)),
+            };
+            println!("{}", serde_json::to_string(&output).unwrap());
+            std::process::exit(1);
+        }
+    };
+    
+    // Log to stderr
+    eprintln!("Deploying to {}...", input.environment);
+    
+    // Return result
+    let output = Output {
+        status: "ok".to_string(),
+        result: Some(serde_json::json!({
+            "deployment_id": "deploy-12345",
+            "environment": input.environment,
+            "action": input.action,
+        })),
+        error: None,
+    };
+    println!("{}", serde_json::to_string(&output).unwrap());
+}
+```
+
+</CodeGroup>
+
+### 2. Create the Payload
+
+Organize your tool files:
+
+```bash
+mkdir -p payload/bin
+cp my-tool payload/bin/acme-tool
+chmod +x payload/bin/acme-tool
+```
+
+### 3. Prepare the Manifest
+
+Create a manifest with:
+
+- Unique `package_id` and `tool_name`
+- SHA-256 hashes of all files
+- Documentation fields (`agent_usage`, `parameters`, `examples`)
+- Your Ed25519 public key
+
+### 4. Package and Sign
+
+```bash
+cargo run -q -p curd-core --bin curd-plugin-pack -- \
+  --manifest manifest.json \
+  --payload-root payload/ \
+  --out acme-toolkit.curdt \
+  --private-key-file signing.key
+```
+
+### 5. Install the Plugin
+
+```json
+{
+  "tool": "plugin_tool",
+  "args": {
+    "action": "add",
+    "archive_path": "/path/to/acme-toolkit.curdt"
+  }
+}
+```
+
+## Managing Tool Plugins
+
+### List Installed Tools
+
+```json
+{
+  "tool": "plugin_tool",
+  "args": {
+    "action": "list"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "installed_plugins": [
+    {
+      "package_id": "acme-proprietary-toolkit",
+      "version": "0.1.0",
+      "tool_name": "acme_tool",
+      "description": "ACME deployment control plane tool",
+      "install_dir": ".curd/plugins/tool/acme-proprietary-toolkit"
+    }
+  ]
+}
+```
+
+### Get Tool Documentation
+
+```json
+{
+  "tool": "plugin_tool",
+  "args": {
+    "action": "doc",
+    "tool_name": "acme_tool"
+  }
+}
+```
+
+Returns the full tool specification including parameters and examples.
+
+### Remove a Tool Plugin
+
+```json
+{
+  "tool": "plugin_tool",
+  "args": {
+    "action": "remove",
+    "package_id": "acme-proprietary-toolkit"
+  }
+}
+```
+
+## Validation Rules
+
+CURD enforces strict validation:
+
+<AccordionGroup>
+  <Accordion title="Tool Name Restrictions">
+    - Must use alphanumeric characters and underscores only
+    - Cannot match built-in tool names (`search`, `edit`, `workspace`, etc.)
+    - Must be unique within the workspace
+  </Accordion>
+  
+  <Accordion title="Protocol Enforcement">
+    - Only `json_stdio_v1` is supported
+    - Other protocol values are rejected during installation
+    - Runtime validation ensures single-object I/O
+  </Accordion>
+  
+  <Accordion title="Path Confinement">
+    - Executable path must be relative
+    - Cannot contain `..` or absolute components
+    - Must point to a file within the package directory
+  </Accordion>
+  
+  <Accordion title="Policy Compliance">
+    - `[plugins].tool_runtime` must be `"sidecar_stdio"`
+    - Tools are only executed if policy allows
+    - Signatures are verified against trusted keys
+  </Accordion>
+</AccordionGroup>
+
+## Example: Native Tool Extension
+
+The repository includes a reference implementation:
+
+```bash
+cd examples/curd-native-tool-extension
+make
+```
+
+This example demonstrates:
+
+- Python-based tool implementation
+- Manifest configuration
+- stdin/stdout protocol handling
+- Packaging workflow
+
+See the [native tool extension README](https://github.com/aerospeedsta/curd/blob/main/examples/curd-native-tool-extension/README.md) for details.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Tool name conflict">
+    **Symptoms**: `reserved tool name` error during installation
+    
+    **Causes**: Tool name matches a built-in CURD tool
+    
+    **Solutions**: Choose a different `tool_name` (e.g., prefix with vendor name)
+  </Accordion>
+  
+  <Accordion title="Protocol violation">
+    **Symptoms**: Tool execution fails with timeout or protocol error
+    
+    **Causes**:
+    - Multiple JSON objects written to stdout
+    - Extra logging or debug output on stdout
+    - Newlines or framing around JSON
+    
+    **Solutions**:
+    - Use stderr for all logging
+    - Write exactly one JSON object to stdout
+    - Test locally with: `echo '{...}' | ./tool`
+  </Accordion>
+  
+  <Accordion title="Permission denied">
+    **Symptoms**: Tool fails to execute
+    
+    **Causes**: Executable bit not set in manifest
+    
+    **Solutions**: Set `"executable": true` in files manifest
+  </Accordion>
+  
+  <Accordion title="Sandbox violations">
+    **Symptoms**: File access errors, network errors
+    
+    **Causes**: Tool attempts to access resources outside sandbox
+    
+    **Solutions**:
+    - Ensure all file paths are relative to workspace
+    - Remove network dependencies
+    - Check sandbox logs in stderr
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin System" icon="puzzle-piece" href="/extensions/plugin-system">
+    Learn about the overall plugin architecture
+  </Card>
+  <Card title="Trust Management" icon="key" href="/extensions/plugin-trust">
+    Configure signing keys and trust policies
+  </Card>
+  <Card title="Language Plugins" icon="code" href="/extensions/language-plugins">
+    Create language support with `.curdl` packages
+  </Card>
+</CardGroup>

@@ -1,0 +1,584 @@
+---
+title: 'workspace'
+description: 'Transaction management and workspace operations'
+---
+
+## Description
+
+The `workspace` tool manages shadow workspace transactions, providing atomic multi-file operations with rollback support, architectural auditing, and dependency tracking.
+
+## Request Parameters
+
+<ParamField path="action" type="string" required>
+  Workspace operation:
+  - `status` - Get workspace and transaction status
+  - `list` - List all files in workspace
+  - `dependencies` - Detect and list package dependencies
+  - `begin` - Start a new transaction session
+  - `diff` - Show uncommitted changes
+  - `commit` - Atomically write changes to disk
+  - `rollback` - Discard changes and end session
+  - `alerts` - View architectural alerts and fault reports
+  - `clear_faults` - Clear all semantic faults
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+Responses vary by action. See action-specific schemas below.
+
+## Actions
+
+### status
+
+Get current workspace and transaction state.
+
+#### Response
+
+<ResponseField name="transaction_active" type="boolean" required>
+  Whether a shadow session is active
+</ResponseField>
+
+<ResponseField name="staged_files" type="array" required>
+  Relative paths of files with uncommitted changes
+</ResponseField>
+
+<ResponseField name="staged_count" type="number" required>
+  Number of staged files
+</ResponseField>
+
+<ResponseField name="files_found" type="number" required>
+  Total source files in workspace
+</ResponseField>
+
+<ResponseField name="state_hash" type="string">
+  Current workspace state hash (for optimistic concurrency control)
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "status"}
+```
+
+```json Response
+{
+  "transaction_active": true,
+  "staged_files": ["src/lib.rs", "src/utils.rs"],
+  "staged_count": 2,
+  "files_found": 47,
+  "state_hash": "a3f5e8c9d4b2a1f6e8c7d5b3a2f1e9c8"
+}
+```
+
+---
+
+### list
+
+List all files in workspace (respects `.gitignore`).
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="files" type="array" required>
+  Array of relative file paths
+</ResponseField>
+
+<ResponseField name="count" type="number" required>
+  Total file count
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "list"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "files": ["src/lib.rs", "src/main.rs", "Cargo.toml", "README.md"],
+  "count": 4
+}
+```
+
+---
+
+### dependencies
+
+Detect package manager and list dependencies.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="package_manager" type="string">
+  Detected package manager: `cargo`, `npm`, `pip`, `go`, etc.
+</ResponseField>
+
+<ResponseField name="manifest_file" type="string">
+  Path to manifest file (e.g., `Cargo.toml`, `package.json`)
+</ResponseField>
+
+<ResponseField name="dependencies" type="array" required>
+  Array of dependency objects
+  
+  <Expandable>
+    <ResponseField name="name" type="string">Package name</ResponseField>
+    <ResponseField name="version" type="string">Version constraint</ResponseField>
+    <ResponseField name="type" type="string">Dependency type: `runtime`, `dev`, `build`</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="dependency_count" type="number" required>
+  Total dependency count
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "dependencies"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "package_manager": "cargo",
+  "manifest_file": "Cargo.toml",
+  "dependencies": [
+    {"name": "serde", "version": "1.0", "type": "runtime"},
+    {"name": "tokio", "version": "1.28", "type": "runtime"},
+    {"name": "tempfile", "version": "3.5", "type": "dev"}
+  ],
+  "dependency_count": 3
+}
+```
+
+---
+
+### begin
+
+Start a new shadow workspace transaction.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Confirmation message
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "begin"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Transaction started. Workspace cloned to physical shadow."
+}
+```
+
+<Info>
+The shadow workspace is a physical copy at `.curd/shadow/root/`. All subsequent edits go to the shadow until committed or rolled back.
+</Info>
+
+---
+
+### diff
+
+View uncommitted changes.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="staged_count" type="number" required>
+  Number of changed files
+</ResponseField>
+
+<ResponseField name="diff" type="string" required>
+  Unified diff output (git diff format)
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "diff"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "staged_count": 1,
+  "diff": "diff --git a/src/lib.rs b/src/lib.rs\nindex a3f5e8c..b4d6f1a 100644\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -10,7 +10,7 @@\n pub fn calculate_score(input: &str) -> f64 {\n-    input.len() as f64\n+    input.len() as f64 * 2.0\n }\n"
+}
+```
+
+---
+
+### commit
+
+Atomically write all staged changes to disk.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="committed" type="array" required>
+  Relative paths of committed files
+</ResponseField>
+
+<ResponseField name="files_written" type="number" required>
+  Number of files written
+</ResponseField>
+
+<ResponseField name="architectural_alerts_count" type="number" required>
+  Number of architectural alerts generated by post-commit audit
+</ResponseField>
+
+<ResponseField name="alerts_available" type="boolean" required>
+  Whether alerts are available via `workspace alerts`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Status message
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "commit"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "committed": ["src/lib.rs", "src/utils.rs"],
+  "files_written": 2,
+  "architectural_alerts_count": 1,
+  "alerts_available": true,
+  "message": "View alerts via `workspace alerts`"
+}
+```
+
+<Warning>
+Commit triggers an **architectural audit** that checks for:
+- Cyclic dependencies
+- Broken imports
+- Semantic integrity violations
+- Test coverage regression
+
+Alerts are non-blocking but should be reviewed.
+</Warning>
+
+---
+
+### rollback
+
+Discard all staged changes and end the transaction.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Confirmation message with change count
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "rollback"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "Rolled back 3 staged change(s). Disk files untouched."
+}
+```
+
+---
+
+### alerts
+
+View architectural alerts and fault reports.
+
+#### Response
+
+<ResponseField name="architectural_alerts" type="object | null" required>
+  Architectural audit report from most recent commit
+  
+  <Expandable>
+    <ResponseField name="cycles" type="array">Detected dependency cycles</ResponseField>
+    <ResponseField name="broken_imports" type="array">Unresolved imports</ResponseField>
+    <ResponseField name="semantic_violations" type="array">Integrity violations</ResponseField>
+    <ResponseField name="alert_count" type="number">Total alert count</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="watchdog_report" type="string | null" required>
+  Watchdog report markdown (test failures, runtime errors)
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "alerts"}
+```
+
+```json Response
+{
+  "architectural_alerts": {
+    "cycles": [
+      ["src/a.rs::foo", "src/b.rs::bar", "src/a.rs::foo"]
+    ],
+    "broken_imports": [],
+    "semantic_violations": [
+      {
+        "symbol": "src/lib.rs::calculate",
+        "severity": "high",
+        "message": "Cohesion ratio dropped below threshold (0.65 -> 0.45)"
+      }
+    ],
+    "alert_count": 2
+  },
+  "watchdog_report": "# Test Failures\n- `test_calculate` failed at src/lib.rs:42"
+}
+```
+
+---
+
+### clear_faults
+
+Clear all semantic faults and watchdog reports.
+
+#### Response
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Confirmation message
+</ResponseField>
+
+#### Example
+
+```json Request
+{"action": "clear_faults"}
+```
+
+```json Response
+{
+  "status": "ok",
+  "message": "All semantic faults and watchdog reports cleared."
+}
+```
+
+---
+
+## Transaction Workflow
+
+### Typical Workflow
+
+```json
+// 1. Start session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Make changes
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "...", "action": "upsert"}
+{"tool": "edit", "uri": "src/lib.rs::bar", "code": "...", "action": "upsert"}
+
+// 3. Review changes
+{"tool": "workspace", "action": "diff"}
+
+// 4. Commit
+{"tool": "workspace", "action": "commit"}
+
+// 5. Check alerts
+{"tool": "workspace", "action": "alerts"}
+```
+
+### Rollback on Error
+
+```json
+// 1. Start session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Make changes
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "...", "action": "upsert"}
+
+// 3. Oops, mistake detected!
+{"tool": "workspace", "action": "rollback"}
+
+// 4. Start fresh
+{"tool": "workspace", "action": "begin"}
+```
+
+## Shadow Workspace
+
+The shadow workspace provides **physical isolation** for uncommitted changes:
+
+- **Location**: `.curd/shadow/root/`
+- **Creation**: Cloned on `begin`
+- **Isolation**: All edits, reads, and builds use shadow files
+- **Atomicity**: Commit uses three-way merge for conflict resolution
+
+### Conflict Resolution
+
+If base files changed during transaction:
+
+1. **Three-way merge** using `git merge-file`
+2. Conflict markers inserted if merge fails
+3. Commit succeeds with warnings
+
+```json Commit with conflicts
+{
+  "status": "ok",
+  "committed": ["src/lib.rs"],
+  "files_written": 1,
+  "conflicts": [
+    {
+      "file": "src/lib.rs",
+      "message": "Merge conflict detected. Review conflict markers."
+    }
+  ]
+}
+```
+
+## Nested Transactions (Savepoints)
+
+CURD supports **nested savepoints** for incremental commits:
+
+```json
+// 1. Begin outer transaction
+{"tool": "workspace", "action": "begin"}
+
+// 2. Make changes
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "..."}
+
+// 3. Create savepoint (commit inner transaction)
+{"tool": "workspace", "action": "commit"}
+// Response: {"message": "Committed nested savepoint."}
+
+// 4. Make more changes
+{"tool": "edit", "uri": "src/lib.rs::bar", "code": "..."}
+
+// 5. Rollback to savepoint
+{"tool": "workspace", "action": "rollback"}
+// Response: {"message": "Rolled back to previous savepoint. Current staged files: 1"}
+
+// 6. Commit outer transaction
+{"tool": "workspace", "action": "commit"}
+```
+
+## Architectural Auditing
+
+Post-commit audits detect:
+
+### Cycle Detection
+
+```json
+{
+  "cycles": [
+    ["src/a.rs::foo", "src/b.rs::bar", "src/a.rs::foo"]
+  ]
+}
+```
+
+### Cohesion Degradation
+
+```json
+{
+  "semantic_violations": [
+    {
+      "symbol": "src/lib.rs::calculate",
+      "severity": "high",
+      "message": "Cohesion ratio dropped: 0.65 -> 0.45"
+    }
+  ]
+}
+```
+
+### Broken Imports
+
+```json
+{
+  "broken_imports": [
+    {
+      "file": "src/lib.rs",
+      "line": 10,
+      "import": "use crate::missing::Foo;",
+      "message": "Symbol 'Foo' not found"
+    }
+  ]
+}
+```
+
+## Dependency Detection
+
+Supported package managers:
+
+| Package Manager | Manifest File | Languages |
+|-----------------|---------------|------------|
+| Cargo | `Cargo.toml` | Rust |
+| npm/yarn/pnpm | `package.json` | JavaScript/TypeScript |
+| pip | `requirements.txt`, `pyproject.toml` | Python |
+| go | `go.mod` | Go |
+| bazel | `BUILD.bazel` | Multi-language |
+| cmake | `CMakeLists.txt` | C/C++ |
+| vcpkg | `vcpkg.json` | C/C++ |
+
+## Error Handling
+
+```json Error: No active transaction
+{
+  "error": "No active transaction. Call 'begin' first."
+}
+```
+
+```json Error: Already in transaction
+{
+  "error": "Transaction already active. Commit or rollback first."
+}
+```
+
+```json Error: Commit failed
+{
+  "error": "Commit failed: merge conflict in src/lib.rs"
+}
+```
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="edit" icon="pen-to-square" href="/api/tools/edit">
+    Make changes within a transaction
+  </Card>
+  <Card title="manage_file" icon="file" href="/api/tools/manage-file">
+    File operations in transactions
+  </Card>
+  <Card title="shell" icon="terminal" href="/api/tools/shell">
+    Run builds/tests in shadow workspace
+  </Card>
+</CardGroup>

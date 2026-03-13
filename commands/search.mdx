@@ -1,0 +1,157 @@
+---
+title: 'curd search'
+description: 'Semantic search across the indexed symbol graph'
+---
+
+## Overview
+
+The `search` command performs semantic search across your indexed codebase, finding symbols (functions, classes, variables, etc.) that match your query. Unlike text-based grep, it understands code structure and ranks results by relevance.
+
+## Syntax
+
+```bash
+curd search [OPTIONS] <QUERY>
+```
+
+**Aliases:** `sch`, `s`
+
+## Parameters
+
+<ParamField path="query" type="string" required>
+  The search query string to find symbols
+</ParamField>
+
+<ParamField path="--kind" type="string">
+  Optional filter by symbol kind (e.g., 'function', 'class', 'struct', 'enum')
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+## Behavior
+
+- Uses BM25 ranking algorithm for relevance scoring
+- Searches indexed symbols, not raw file contents
+- Returns up to 20 results by default
+- Results include symbol name, kind, URI, and relevance score
+- Requires a built index (run `curd doctor` first if needed)
+
+## Examples
+
+<CodeGroup>
+
+```bash Basic Search
+# Find all symbols containing "parse"
+curd search parse
+```
+
+```bash Filter by Kind
+# Find only function symbols matching "handler"
+curd search handler --kind function
+```
+
+```bash Class Search
+# Find class definitions
+curd search Config --kind class
+```
+
+```bash Different Workspace
+# Search in a different workspace
+curd search validate --root ~/projects/myapp
+```
+
+</CodeGroup>
+
+## Output Format
+
+Returns JSON with search results:
+
+```json
+{
+  "results": [
+    {
+      "uri": "src/parser.rs::parse_expression",
+      "name": "parse_expression",
+      "kind": "function",
+      "score": 0.85,
+      "file_path": "src/parser.rs",
+      "line": 142
+    }
+  ],
+  "total": 1,
+  "query": "parse"
+}
+```
+
+## Common Patterns
+
+### Finding API Endpoints
+
+```bash
+curd search route --kind function
+```
+
+### Locating Data Models
+
+```bash
+curd search User --kind struct
+```
+
+### Finding Test Functions
+
+```bash
+curd search test_
+```
+
+## Integration with Other Commands
+
+Chain search with other CURD commands:
+
+```bash
+# Search and then read the symbol
+curd search parse_config --kind function
+curd read src/config.rs::parse_config
+
+# Search and analyze dependencies
+curd search ApiHandler --kind class
+curd graph src/api.rs::ApiHandler --depth 2
+```
+
+## Performance Notes
+
+- Search is fast even on large codebases (100k+ files)
+- First search after indexing may be slower
+- Results are cached for repeated queries
+- Symbol density affects search quality (see `curd test nodes`)
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No results found">
+    - Ensure the index is built: `curd doctor`
+    - Check that your query matches symbol names (not comments or strings)
+    - Try broader queries without `--kind` filter
+    - Verify the file containing the symbol is indexed
+  </Accordion>
+
+  <Accordion title="Irrelevant results">
+    - Use `--kind` to filter by symbol type
+    - Make queries more specific
+    - Check symbol density: `curd test nodes --verbose`
+  </Accordion>
+
+  <Accordion title="Index not found">
+    Initialize the workspace:
+    ```bash
+    curd init
+    curd doctor
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd graph](/commands/graph) - Explore symbol dependencies
+- [curd read](/commands/read) - Read symbol source code
+- [curd test](/commands/test) - Verify index quality

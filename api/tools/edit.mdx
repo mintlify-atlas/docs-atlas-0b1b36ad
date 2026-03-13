@@ -1,0 +1,350 @@
+---
+title: 'edit'
+description: 'Symbol-level code editing with AST churn limits'
+---
+
+## Description
+
+The `edit` tool performs precise, symbol-level code modifications with built-in safety checks including AST churn limits, optimistic concurrency control, and session requirements.
+
+<Warning>
+**Session Required**: All edit operations require an active workspace session. Call `workspace(action: 'begin')` before editing.
+</Warning>
+
+## Request Parameters
+
+<ParamField path="uri" type="string" required>
+  Target URI. Supports:
+  - **Module top**: `"src/lib.rs"` - Edit file header (imports, module-level code)
+  - **Symbol**: `"src/lib.rs::calculate"` - Edit specific function/class
+  - **Nested symbol**: `"src/lib.rs::User::to_dict"` - Edit class method
+  - **Overloaded symbol**: `"src/lib.rs::process::42"` - Disambiguate by line number
+  - **External context**: `"@mylib::utils::helper"` (requires write mode)
+</ParamField>
+
+<ParamField path="code" type="string" required>
+  New source code. Must be syntactically valid.
+</ParamField>
+
+<ParamField path="action" type="string" required>
+  Edit operation:
+  - `upsert` - Create or replace symbol
+  - `delete` - Remove symbol entirely
+</ParamField>
+
+<ParamField path="base_state_hash" type="string">
+  Expected workspace state hash for optimistic concurrency control. If provided and the current state hash differs, the edit is rejected with `STALE_STATE_CONFLICT`.
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="uri" type="string" required>
+  Original input URI
+</ResponseField>
+
+<ResponseField name="action" type="string" required>
+  Operation performed:
+  - `created` - Symbol did not exist, was created
+  - `replaced` - Symbol existed, was replaced
+  - `deleted` - Symbol was removed
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json Create New Function
+{
+  "uri": "src/utils.rs::normalize",
+  "code": "pub fn normalize(input: &str) -> String {\n    input.trim().to_lowercase()\n}",
+  "action": "upsert"
+}
+```
+
+```json Replace Existing Function
+{
+  "uri": "src/scoring.rs::calculate_score",
+  "code": "pub fn calculate_score(input: &str) -> f64 {\n    // Updated implementation\n    input.len() as f64 * 2.5\n}",
+  "action": "upsert"
+}
+```
+
+```json Edit Class Method
+{
+  "uri": "src/models.rs::User::to_dict",
+  "code": "fn to_dict(&self) -> HashMap<String, String> {\n    let mut map = HashMap::new();\n    map.insert(\"name\".to_string(), self.name.clone());\n    map\n}",
+  "action": "upsert"
+}
+```
+
+```json Delete Function
+{
+  "uri": "src/deprecated.rs::old_function",
+  "code": "",
+  "action": "delete"
+}
+```
+
+```json Edit with Concurrency Control
+{
+  "uri": "src/lib.rs::process",
+  "code": "pub fn process(x: i32) -> i32 { x * 2 }",
+  "action": "upsert",
+  "base_state_hash": "a3f5e8c9d4b2a1f6e8c7d5b3a2f1e9c8"
+}
+```
+
+```json Edit Module Top (Imports)
+{
+  "uri": "src/lib.rs",
+  "code": "use std::collections::HashMap;\nuse serde::{Serialize, Deserialize};\n\n",
+  "action": "upsert"
+}
+```
+
+</CodeGroup>
+
+### Response Examples
+
+```json Success: Created
+{
+  "uri": "src/utils.rs::normalize",
+  "action": "created"
+}
+```
+
+```json Success: Replaced
+{
+  "uri": "src/scoring.rs::calculate_score",
+  "action": "replaced"
+}
+```
+
+```json Success: Deleted
+{
+  "uri": "src/deprecated.rs::old_function",
+  "action": "deleted"
+}
+```
+
+## AST Churn Limits
+
+CURD enforces **AST churn limits** to prevent overly broad edits that are difficult to review:
+
+- **Churn**: Percentage of file's AST nodes affected by edit
+- **Limit**: Configured per file size tier in `settings.toml`
+
+### Default Limits
+
+| File Size | Node Threshold | Churn Limit |
+|-----------|----------------|-------------|
+| Small | < 100 nodes | 80% |
+| Standard | 100-1000 nodes | 40% |
+| Large | 1000-5000 nodes | 25% |
+| Massive | > 5000 nodes | 15% |
+
+### Configuration
+
+```toml settings.toml
+[edit]
+churn_limit = 0.40                # Default 40%
+churn_small_limit = 0.80          # Small files: 80%
+churn_large_limit = 0.25          # Large files: 25%
+churn_massive_limit = 0.15        # Massive files: 15%
+
+small_file_nodes = 100
+large_file_nodes = 1000
+massive_file_nodes = 5000
+```
+
+### Churn Violation Error
+
+```json Error: Churn limit exceeded
+{
+  "error": "AST Churn Limit Exceeded: Modification replaces 55.3% of the file's AST nodes, which exceeds the current limit of 40.0% for a Standard file (450 nodes). Break this into smaller semantic edits."
+}
+```
+
+<Tip>
+**Best Practice**: Edit one function/class at a time. For large refactors, use multiple sequential edits or compile a `.curd` script.
+</Tip>
+
+## Optimistic Concurrency Control
+
+Prevent lost updates in multi-agent scenarios using `base_state_hash`:
+
+```json Workflow
+// 1. Get current state hash
+{"tool": "workspace", "action": "status"}
+// Returns: {"state_hash": "a3f5e8c9..."}
+
+// 2. Edit with expected hash
+{
+  "tool": "edit",
+  "uri": "src/lib.rs::foo",
+  "code": "...",
+  "action": "upsert",
+  "base_state_hash": "a3f5e8c9..."
+}
+```
+
+If another agent modified the workspace:
+
+```json Error: Stale state
+{
+  "error": "STALE_STATE_CONFLICT: The workspace state has changed. Expected hash a3f5e8c9..., but found b4d6f1a2.... Please pull the latest graph."
+}
+```
+
+## Session Requirements
+
+### Without Session
+
+```json Error: Session required
+{
+  "error": "Cannot edit 'src/lib.rs::foo': Workspace is locked by another active session. Open a CURD session or close the existing one."
+}
+```
+
+### With Session
+
+```json Correct workflow
+// 1. Begin session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Make edits (all edits go to shadow workspace)
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "...", "action": "upsert"}
+{"tool": "edit", "uri": "src/lib.rs::bar", "code": "...", "action": "upsert"}
+
+// 3. Review changes
+{"tool": "workspace", "action": "diff"}
+
+// 4. Commit atomically
+{"tool": "workspace", "action": "commit"}
+```
+
+Edits within a session are **atomic** - either all succeed or none are written.
+
+## Overload Disambiguation
+
+When editing overloaded symbols, specify line number:
+
+```json Error: Ambiguous symbol
+{
+  "uri": "src/lib.rs::process",
+  "error": "Symbol 'process' is overloaded. Please disambiguate by appending the line number to the URI (e.g., 'src/lib.rs::process::LINE_NUMBER').\nAvailable options:\nsrc/lib.rs::process::10: pub fn process(input: &str)\nsrc/lib.rs::process::42: pub fn process(input: i32)"
+}
+```
+
+Resolve:
+
+```json
+{
+  "uri": "src/lib.rs::process::42",
+  "code": "pub fn process(input: i32) -> i32 { input * 2 }",
+  "action": "upsert"
+}
+```
+
+## External Context Editing
+
+Edit symbols in linked external repositories (requires write mode):
+
+```json
+{
+  "uri": "@mylib::utils::helper",
+  "code": "...",
+  "action": "upsert"
+}
+```
+
+Context must be registered with write permissions:
+
+```json
+{
+  "tool": "context",
+  "action": "add",
+  "path": "/path/to/mylib",
+  "alias": "@mylib",
+  "write": true
+}
+```
+
+Attempting to edit a read-only context:
+
+```json Error: Context is read-only
+{
+  "error": "Context '@rust-analyzer' is linked in Read mode. Writes are prohibited."
+}
+```
+
+## Module Top Editing
+
+Edit file-level code (imports, constants) by omitting the symbol name:
+
+```json
+{
+  "uri": "src/lib.rs",
+  "code": "use std::collections::HashMap;\nuse serde::Serialize;\n\nconst VERSION: &str = \"1.0.0\";\n\n",
+  "action": "upsert"
+}
+```
+
+The new code is inserted **before** the first symbol definition. Existing symbols remain untouched.
+
+<Warning>
+`delete` action is **not supported** for module tops. Delete individual symbols instead.
+</Warning>
+
+## Automatic Index Invalidation
+
+All successful edits automatically invalidate the symbol index for affected files. Subsequent `search` or `graph` queries will rebuild the index.
+
+## Error Handling
+
+```json File not found (upsert creates file)
+// No error - file is created automatically
+{
+  "uri": "src/new_file.rs::foo",
+  "action": "created"
+}
+```
+
+```json Symbol not found (upsert creates symbol)
+// No error - symbol is appended to file
+{
+  "uri": "src/existing.rs::new_function",
+  "action": "created"
+}
+```
+
+```json Symbol not found (delete fails)
+{
+  "error": "Symbol 'nonexistent' not found for deletion"
+}
+```
+
+```json Syntax validation (planned feature)
+// Future: Parse code before write
+{
+  "error": "Syntax error: expected '}' at line 5"
+}
+```
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="workspace" icon="folder-tree" href="/api/tools/workspace">
+    Manage edit sessions
+  </Card>
+  <Card title="read" icon="book-open" href="/api/tools/read">
+    Read symbols before editing
+  </Card>
+  <Card title="search" icon="magnifying-glass" href="/api/tools/search">
+    Find symbols to edit
+  </Card>
+</CardGroup>

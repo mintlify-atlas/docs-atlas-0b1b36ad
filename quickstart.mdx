@@ -1,80 +1,429 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get started with CURD in minutes - from initialization to your first workflows
 ---
 
-## Get started in three steps
+This guide walks you through your first CURD workflows, from initialization to safe code mutation and script execution.
 
-Get your documentation site running locally and make your first customization.
+## Initialize a Workspace
 
-### Step 1: Set up your local environment
+Navigate to your project directory and initialize CURD:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+```bash
+cd /path/to/your/project
+curd init
+```
+
+<Info>
+`curd init` creates the `.curd/` directory and auto-detects your build system, source layout, and dependency ecosystem.
+</Info>
+
+Run diagnostics to verify setup:
+
+```bash
+curd doctor .
+```
+
+Expected output:
+```
+CURD Doctor Report
+==================
+Workspace: /path/to/your/project
+Build System: cargo
+Languages: rust
+Indexed Symbols: 1,247
+Status: OK
+```
+
+## Read-Only Workflow
+
+Start with code intelligence without mutation.
+
+<Steps>
+  <Step title="Search for symbols">
+    ```bash
+    curd search alpha
+    ```
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    Output shows ranked search results:
+    ```
+    src/lib.rs::alpha (score: 0.92)
+    tests/alpha_test.rs::test_alpha (score: 0.67)
+    ```
+  </Step>
+  
+  <Step title="Read specific code">
+    ```bash
+    curd read src/lib.rs::alpha
+    ```
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    Returns the exact function or symbol:
+    ```rust
+    pub fn alpha() -> Result<String> {
+        Ok("alpha".to_string())
+    }
+    ```
+  </Step>
+  
+  <Step title="Explore dependencies">
+    ```bash
+    curd graph src/lib.rs::alpha --direction both --depth 2
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+    Shows callers and callees:
+    ```
+    Callers:
+      - src/main.rs::main
+      - tests/integration.rs::test_suite
+    
+    Callees:
+      - std::result::Result
+      - std::string::String
+    ```
+  </Step>
+</Steps>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+The `search`, `read`, and `graph` commands form the understanding layer. Use them to navigate any codebase structurally.
 </Note>
+
+## Safe Mutation Workflow
+
+CURD requires a workspace session before any mutation.
+
+<Steps>
+  <Step title="Begin a session">
+    ```bash
+    curd workspace begin
+    ```
+    
+    Creates a shadow workspace:
+    ```
+    Session started: session_a1b2c3d4
+    Shadow workspace: .curd/shadow/session_a1b2c3d4/root
+    ```
+  </Step>
+  
+  <Step title="Make an edit">
+    ```bash
+    curd edit src/lib.rs::alpha --code 'pub fn alpha() -> Result<String> {
+        Ok("updated alpha".to_string())
+    }'
+    ```
+    
+    The edit is staged in the shadow workspace, not your actual files.
+  </Step>
+  
+  <Step title="Review changes">
+    ```bash
+    curd workspace diff
+    ```
+    
+    Shows the diff:
+    ```diff
+    --- src/lib.rs
+    +++ src/lib.rs (shadow)
+    @@ -1,3 +1,3 @@
+     pub fn alpha() -> Result<String> {
+    -    Ok("alpha".to_string())
+    +    Ok("updated alpha".to_string())
+     }
+    ```
+  </Step>
+  
+  <Step title="Commit or rollback">
+    To apply changes:
+    ```bash
+    curd workspace commit
+    ```
+    
+    Or to discard:
+    ```bash
+    curd workspace rollback
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+All mutating operations (like `edit`) require an active workspace session. This prevents accidental direct file modification.
+</Warning>
+
+## Script Authoring Workflow
+
+Create repeatable workflows with `.curd` scripts.
+
+<Steps>
+  <Step title="Create a script">
+    Create `fix_alpha.curd`:
+    
+    ```curd
+    # explain: update alpha function to return enhanced message
+    # why: improve user-facing output clarity
+    # risk: low - pure string change, no logic modification
+    
+    use session required
+    
+    let new_impl = """
+    pub fn alpha() -> Result<String> {
+        Ok("enhanced alpha output".to_string())
+    }
+    """
+    
+    atomic {
+      edit uri="src/lib.rs::alpha" action="upsert" code=$new_impl
+      verify_impact strict=true
+    }
+    ```
+  </Step>
+  
+  <Step title="Check syntax">
+    ```bash
+    curd run check fix_alpha.curd
+    ```
+    
+    Validates script syntax and tool calls:
+    ```
+    Script validation: PASSED
+    Tool calls: 1 edit, 1 verify_impact
+    Session requirement: enforced
+    ```
+  </Step>
+  
+  <Step title="Compile to plan">
+    ```bash
+    curd run compile fix_alpha.curd
+    ```
+    
+    Creates a compiled plan artifact:
+    ```
+    Plan compiled: plan_e5f6g7h8
+    Artifact: .curd/plans/plan_e5f6g7h8.json
+    Source hash: abc123...
+    ```
+  </Step>
+  
+  <Step title="Review plan (optional)">
+    ```bash
+    curd plan edit plan_e5f6g7h8
+    ```
+    
+    Opens the plan artifact for review before execution.
+  </Step>
+  
+  <Step title="Execute the script">
+    ```bash
+    curd workspace begin
+    curd run fix_alpha.curd
+    curd workspace commit
+    ```
+    
+    The script executes within the session:
+    ```
+    Executing plan: plan_e5f6g7h8
+    [1/2] edit src/lib.rs::alpha... OK
+    [2/2] verify_impact... OK
+    Plan completed successfully
+    ```
+  </Step>
+</Steps>
+
+<Info>
+Scripts preserve explainability metadata (`explain`, `why`, `risk`, `review`) in compiled plan artifacts for audit and review.
+</Info>
+
+## Common Workflows
+
+### Explore Unfamiliar Codebase
+
+```bash
+# Find entry points
+curd search main
+
+# Read the main function
+curd read src/main.rs::main
+
+# See what it depends on
+curd graph src/main.rs::main --direction callees --depth 3
+```
+
+### Safe Refactoring
+
+```bash
+# Start session
+curd workspace begin
+
+# Make changes
+curd edit src/utils.rs::parse_config --code "..."
+curd edit src/main.rs::init --code "..."
+
+# Review impact
+curd workspace diff
+curd graph src/utils.rs::parse_config --direction callers
+
+# Commit if safe
+curd workspace commit
+```
+
+### Automated Workflow
+
+```bash
+# Create script once
+cat > migration.curd << 'EOF'
+use session required
+
+sequence {
+  edit uri="src/old_api.rs::handler" action="replace" code=$new_handler
+  edit uri="tests/api_test.rs::test_handler" action="replace" code=$new_test
+}
+EOF
+
+# Run repeatedly
+curd workspace begin
+curd run migration.curd
+curd workspace commit
+```
+
+## Runtime Modes and Profiles
+
+CURD has two layers of control:
+
+### Runtime Ceiling
+
+Set via `CURD_MODE` environment variable:
+
+- **`full`** (default) - All features enabled
+- **`lite`** - Restricted capabilities, safer for agents
+
+```bash
+export CURD_MODE=lite
+curd --version
+```
+
+### Profiles
+
+Defined in `.curd/settings.toml` for fine-grained capability control:
+
+```toml
+[profiles.default]
+can_edit = true
+can_execute_shell = false
+max_file_size_mb = 10
+
+[profiles.ci_strict]
+can_edit = true
+can_execute_shell = false
+require_plan_approval = true
+```
+
+Activate a profile:
+
+```bash
+curd --profile ci_strict run fix_alpha.curd
+```
+
+<Note>
+The runtime ceiling (`full`/`lite`) sets the outer boundary. Profiles define what the actor can do within that boundary.
+</Note>
+
+## Understanding CURD Output
+
+### Search Results
+
+```bash
+curd search query
+```
+
+- **Symbol URIs** in format `file::symbol`
+- **Relevance scores** (0.0 to 1.0) via BM25 ranking
+- **Context snippets** showing match location
+
+### Graph Output
+
+```bash
+curd graph src/lib.rs::alpha --direction both
+```
+
+- **Callers** - functions that call this symbol
+- **Callees** - functions this symbol calls
+- **Depth** - traversal distance from root
+
+### Workspace State
+
+```bash
+curd workspace status
+```
+
+```
+Active session: session_a1b2c3d4
+Modified files: 3
+Staged edits: 5
+Conflicts: 0
+```
+
+## Troubleshooting
+
+### Command not found
+
+Ensure CURD is in your PATH:
+
+```bash
+which curd
+```
+
+If not found, reinstall or add to PATH manually.
+
+### Session errors
+
+```
+Error: No active workspace session
+```
+
+Solution: Begin a session before mutations:
+
+```bash
+curd workspace begin
+```
+
+### Index out of date
+
+```
+Warning: Index may be stale
+```
+
+Solution: Re-run doctor to rebuild index:
+
+```bash
+curd doctor . --reindex
+```
+
+### Permission denied
+
+```
+Error: Permission denied writing to .curd/
+```
+
+Solution: Check directory permissions:
+
+```bash
+chmod -R u+w .curd/
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Scripts and Plans" icon="file-code" href="/workflows/curd-scripts">
+    Learn the `.curd` scripting language and plan compilation
+  </Card>
+  
+  <Card title="Tools and Profiles" icon="wrench" href="/concepts/profiles-and-runtime">
+    Understand profiles, policies, and capability gating
+  </Card>
+  
+  <Card title="CLI Reference" icon="terminal" href="/commands/search">
+    Complete command reference for all CURD tools
+  </Card>
+  
+  <Card title="MCP Integration" icon="plug" href="/integration/mcp-server">
+    Use CURD as an MCP server for AI agents
+  </Card>
+</CardGroup>

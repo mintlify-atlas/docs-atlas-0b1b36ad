@@ -1,0 +1,418 @@
+---
+title: "MCP Server"
+description: "Connect to CURD through the Model Context Protocol (MCP) interface"
+icon: "plug"
+---
+
+## Overview
+
+CURD implements the **Model Context Protocol (MCP)** specification, enabling AI agents and language models to interact with code intelligence features through a standardized JSON-RPC interface.
+
+The MCP server exposes CURD's full toolset via stdio, making it compatible with any MCP-aware client like Claude Desktop, Cline, or custom agent frameworks.
+
+## Architecture
+
+The MCP server runs as a **stdio-based JSON-RPC server** implementing the `2024-11-05` protocol version:
+
+- **Protocol**: JSON-RPC 2.0 over stdio
+- **Transport**: Line-delimited JSON or Content-Length framed messages
+- **API Version**: `0.7.1`
+- **Tools**: 40+ code intelligence tools (search, graph, edit, workspace, etc.)
+
+<Info>
+  The MCP implementation lives in `src/mcp.rs` and routes through the shared validation layer in `curd-core`.
+</Info>
+
+## Runtime Modes
+
+CURD MCP server supports two runtime modes controlled by the `CURD_MODE` environment variable:
+
+<AccordionGroup>
+  <Accordion title="Full Mode (default)" icon="unlock">
+    **All tools and methods enabled**
+    
+    ```bash
+    export CURD_MODE=full
+    curd run .
+    ```
+    
+    - Full access to search, graph, edit, workspace, shell, debug, etc.
+    - Supports plugins, tool groups, and custom extensions
+    - Recommended for local development and trusted environments
+  </Accordion>
+
+  <Accordion title="Lite Mode" icon="lock">
+    **Restricted tool surface for safety**
+    
+    ```bash
+    export CURD_MODE=lite
+    curd run .
+    ```
+    
+    Allowed tools only:
+    - `search` (read-only semantic search)
+    - `read` (file/symbol reading)
+    - `edit` (AST-aware editing)
+    - `graph` (dependency graph queries)
+    - `workspace` (transaction management)
+    
+    This mode is ideal for untrusted agents or sandboxed environments.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Runtime mode acts as a **ceiling**. Actual capabilities are further gated by active profiles in `settings.toml`.
+</Note>
+
+## Connection Flow
+
+MCP clients connect to CURD via stdio. Here's the standard initialization flow:
+
+```json
+// 1. Client sends initialize request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {
+      "name": "my-agent",
+      "version": "1.0.0"
+    }
+  }
+}
+
+// 2. Server responds with capabilities
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "apiVersion": "0.7.1",
+    "protocolVersion": "2024-11-05",
+    "capabilities": { "tools": {} },
+    "serverInfo": { "name": "curd", "version": "0.1.0" }
+  }
+}
+```
+
+## Tool Discovery
+
+After initialization, clients can list available tools:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/list",
+  "params": {}
+}
+```
+
+Response includes all tools with JSON Schema input schemas:
+
+```json
+{
+  "result": {
+    "tools": [
+      {
+        "name": "search",
+        "description": "Instant, SQLite-backed Semantic Graph search...",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": { "type": "string" },
+            "mode": { "type": "string", "enum": ["symbol", "text", "tiered"] },
+            "limit": { "type": "integer" }
+          },
+          "required": ["query", "mode"]
+        }
+      }
+    ]
+  }
+}
+```
+
+## Calling Tools
+
+Execute tools via `tools/call`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "query": "handle_connection",
+      "mode": "symbol",
+      "limit": 10
+    }
+  }
+}
+```
+
+Response format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"results\": [...], \"count\": 10}"
+      }
+    ]
+  }
+}
+```
+
+## Session Management
+
+For mutating operations (edit, shell, etc.), establish an authenticated session:
+
+<Steps>
+  <Step title="Open Connection">
+    Generate a cryptographic challenge:
+    
+    ```json
+    {
+      "method": "tools/call",
+      "params": {
+        "name": "connection_open",
+        "arguments": {
+          "pubkey_hex": "<ed25519-public-key-hex>"
+        }
+      }
+    }
+    ```
+    
+    Returns a nonce to sign.
+  </Step>
+
+  <Step title="Verify Signature">
+    Sign the nonce and submit proof:
+    
+    ```json
+    {
+      "method": "tools/call",
+      "params": {
+        "name": "connection_verify",
+        "arguments": {
+          "pubkey_hex": "<ed25519-public-key-hex>",
+          "signature_hex": "<ed25519-signature-hex>"
+        }
+      }
+    }
+    ```
+    
+    Receive a `connection_token` for subsequent requests.
+  </Step>
+
+  <Step title="Begin Workspace Session">
+    Start a shadow workspace transaction:
+    
+    ```json
+    {
+      "method": "tools/call",
+      "params": {
+        "name": "workspace",
+        "arguments": {
+          "action": "begin",
+          "connection_token": "<token-from-verify>"
+        }
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Agents MUST open a workspace session before calling mutating tools like `edit`, `manage_file`, or `shell`. Failure results in a barrier error.
+</Warning>
+
+## Progress Notifications
+
+CURD sends real-time progress updates as JSON-RPC notifications:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "notifications/progress",
+  "params": {
+    "phase": "indexing",
+    "processed_files": 1500,
+    "total_files": 2000,
+    "percent": 75.0,
+    "duration_ms": 1234
+  }
+}
+```
+
+Notification phases:
+- `indexing` - Semantic graph construction
+- `stall_detected` - Indexing appears stuck (diagnostic)
+- `indexing_stats` - Summary statistics after indexing completes
+
+## MCP Client Configuration
+
+### Claude Desktop
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
+
+```json
+{
+  "mcpServers": {
+    "curd": {
+      "command": "curd",
+      "args": ["run", "/path/to/your/workspace"],
+      "env": {
+        "CURD_MODE": "full"
+      }
+    }
+  }
+}
+```
+
+### Cline (VS Code)
+
+Add to Cline MCP settings:
+
+```json
+{
+  "curd": {
+    "command": "curd",
+    "args": ["run", "${workspaceFolder}"],
+    "env": {
+      "CURD_MODE": "lite"
+    }
+  }
+}
+```
+
+### Custom Python MCP Client
+
+```python
+import json
+import subprocess
+
+process = subprocess.Popen(
+    ["curd", "run", "."],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    bufsize=0
+)
+
+def send_request(method, params, req_id=1):
+    request = {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": method,
+        "params": params
+    }
+    process.stdin.write(json.dumps(request) + "\n")
+    process.stdin.flush()
+    
+    response = process.stdout.readline()
+    return json.loads(response)
+
+# Initialize
+result = send_request("initialize", {
+    "protocolVersion": "2024-11-05",
+    "capabilities": {},
+    "clientInfo": {"name": "custom-client", "version": "1.0.0"}
+})
+
+print(result)
+```
+
+## Error Handling
+
+CURD returns structured JSON-RPC errors:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 3,
+  "error": {
+    "code": -32601,
+    "message": "Tool disabled in current mode: shell",
+    "details": null
+  }
+}
+```
+
+Common error codes:
+- `-32601` - Method/tool not found or disabled
+- `-32000` - Internal server error or policy violation
+
+## Dynamic Tool Extensions
+
+CURD MCP server automatically exposes:
+
+1. **Tool Plugins** (`.curdt` packages)
+   - Signed native tool extensions
+   - Appear in `tools/list` with metadata
+
+2. **Adopted MCP Tools** (via `tool_group`)
+   - External MCP servers adopted into CURD
+   - Proxied through CURD's validation layer
+
+See [Plugin Extensions](/extensions/plugin-system) for details.
+
+## Performance Characteristics
+
+- **Cold start**: ~50-200ms (workspace validation + context init)
+- **Tool calls**: ~10-500ms depending on operation
+- **Search**: ~10ms on 200k+ file repos (indexed)
+- **Graph queries**: ~20-100ms for typical dependency trees
+
+<Tip>
+  Use `benchmark` tool to profile specific operations in your workspace.
+</Tip>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always Initialize" icon="handshake">
+    Send `initialize` before any tool calls. Servers may reject requests without proper handshake.
+  </Card>
+  
+  <Card title="Use Sessions" icon="shield">
+    Open workspace sessions for edit operations. Shadow transactions protect against partial failures.
+  </Card>
+  
+  <Card title="Check Progress" icon="chart-line">
+    Listen for `notifications/progress` during indexing. Don't hammer tools while indexing is active.
+  </Card>
+  
+  <Card title="Validate Profiles" icon="clipboard-check">
+    Test your profile configuration with `curd doctor` before deploying agents.
+  </Card>
+</CardGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Python Binding" href="/integration/python-binding" icon="python">
+    Use CURD from Python environments
+  </Card>
+  
+  <Card title="Node.js Binding" href="/integration/nodejs-binding" icon="node-js">
+    Use CURD from JavaScript/TypeScript
+  </Card>
+  
+  <Card title="Docker" href="/integration/docker" icon="docker">
+    Run CURD MCP in containers
+  </Card>
+  
+  <Card title="Tools Reference" href="/api/tools/overview" icon="wrench">
+    Complete tool documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,120 @@
+---
+title: 'Tools Overview'
+description: 'Complete reference for CURD MCP tools'
+---
+
+CURD exposes a suite of structured tools via the Model Context Protocol (MCP) for code intelligence, semantic analysis, and workspace management.
+
+## Available Tools
+
+<CardGroup cols={2}>
+  <Card title="search" icon="magnifying-glass" href="/api/tools/search">
+    Semantic code search with BM25 ranking
+  </Card>
+  <Card title="graph" icon="diagram-project" href="/api/tools/graph">
+    Dependency graph traversal and analysis
+  </Card>
+  <Card title="read" icon="book-open" href="/api/tools/read">
+    URI-based code reading with context
+  </Card>
+  <Card title="edit" icon="pen-to-square" href="/api/tools/edit">
+    Symbol-level code editing with churn limits
+  </Card>
+  <Card title="workspace" icon="folder-tree" href="/api/tools/workspace">
+    Transaction management and workspace operations
+  </Card>
+  <Card title="shell" icon="terminal" href="/api/tools/shell">
+    Sandboxed shell command execution
+  </Card>
+  <Card title="manage_file" icon="file" href="/api/tools/manage-file">
+    File system operations (create, delete, rename)
+  </Card>
+</CardGroup>
+
+## Tool Capabilities
+
+All tools route through a shared validation and capability-check layer that enforces:
+
+- **Profile-based access control**: Configured via `[profiles]` in `settings.toml`
+- **Runtime ceiling**: Global capability cap via `CURD_MODE` environment variable
+- **Policy enforcement**: Filesystem boundaries, binary allowlists, and mutation gates
+
+### Capability Atoms
+
+| Tool | Canonical Operation | Capability Atom |
+|------|---------------------|------------------|
+| `search`, `find`, `contract` | Lookup | `lookup` |
+| `graph`, `crawl`, `frontier` | Traverse | `traverse` |
+| `read`, `doc`, `lsp` | Read | `read` |
+| `edit`, `manage_file`, `mutate` | Change | `change.apply` |
+| `workspace`, `session` | Session | `session.begin` / `session.verify` |
+| `shell`, `build` | Exec | `exec.task` |
+
+## Session Requirements
+
+<Warning>
+Mutating tools (`edit`, `manage_file`, `shell` with destructive commands) **require an active workspace session**. Call `workspace(action: 'begin')` before mutations.
+</Warning>
+
+### Workflow Example
+
+```json
+// 1. Open session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Make changes
+{"tool": "edit", "uri": "src/lib.rs::foo", "code": "...", "action": "upsert"}
+
+// 3. Review changes
+{"tool": "workspace", "action": "diff"}
+
+// 4. Commit or rollback
+{"tool": "workspace", "action": "commit"}
+```
+
+## Error Handling
+
+All tools return structured JSON responses with an `error` field on failure:
+
+```json
+{
+  "error": "Symbol 'foo' not found in workspace",
+  "details": {}
+}
+```
+
+Common error codes:
+- `SESSION_REQUIRED`: Mutating operation without active session
+- `STALE_STATE_CONFLICT`: Optimistic concurrency control failure
+- `AST Churn Limit Exceeded`: Edit exceeds configured churn threshold
+- `Validation failed`: Policy or capability check failure
+
+## Index Management
+
+Several tools depend on CURD's symbol index:
+
+- **Automatic indexing**: `search` and `graph` auto-build indices on first use
+- **Index modes**: `full`, `fast`, `lazy`, `scoped` (configured in `settings.toml`)
+- **Cache invalidation**: Mutations automatically invalidate stale indices
+- **Manual rebuild**: Use `curd index` CLI command
+
+<Info>
+Index build stats are returned in `search` responses under `index_stats`.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Search API" icon="magnifying-glass" href="/api/tools/search">
+    Query symbols and functions
+  </Card>
+  <Card title="Edit API" icon="pen-to-square" href="/api/tools/edit">
+    Modify code at symbol granularity
+  </Card>
+  <Card title="Graph API" icon="diagram-project" href="/api/tools/graph">
+    Explore dependencies
+  </Card>
+  <Card title="Workspace API" icon="folder-tree" href="/api/tools/workspace">
+    Manage transactions
+  </Card>
+</CardGroup>

@@ -1,0 +1,409 @@
+---
+title: 'curd refactor'
+description: 'Semantic refactoring engine for safe code transformations'
+---
+
+## Overview
+
+The `refactor` command performs semantic, structure-aware code transformations including renaming symbols, moving code between files, and extracting functions. All operations respect language semantics and update all references.
+
+## Syntax
+
+```bash
+curd refactor [OPTIONS] <COMMAND>
+```
+
+**Alias:** `ref`
+
+## Subcommands
+
+### rename
+
+Rename a function, class, variable, or other symbol across the entire workspace.
+
+**Syntax:**
+```bash
+curd refactor rename <SYMBOL> <NEW_NAME> [OPTIONS]
+```
+
+<ParamField path="symbol" type="string" required>
+  The symbol URI to rename (e.g., `src/api.rs::old_function`)
+</ParamField>
+
+<ParamField path="new_name" type="string" required>
+  The new name for the symbol
+</ParamField>
+
+<ParamField path="--lsp" type="string">
+  Use an external LSP server for type-aware renaming (e.g., `rust-analyzer`)
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root
+</ParamField>
+
+**Behavior:**
+- Renames symbol definition
+- Updates all references across workspace
+- Handles overloaded symbols with interactive selection
+- Preserves formatting and comments
+- Requires active shadow transaction
+
+**Examples:**
+
+<CodeGroup>
+
+```bash Basic Rename
+# Rename a function
+curd session begin
+curd refactor rename src/api.rs::handle_request process_request
+curd session commit
+```
+
+```bash With LSP
+# Use rust-analyzer for type-aware rename
+curd session begin
+curd refactor rename src/lib.rs::Config AppConfig --lsp rust-analyzer
+curd session commit
+```
+
+```bash Class Rename
+# Rename a class and all usages
+curd session begin
+curd refactor rename src/models.rs::User UserAccount
+curd session commit
+```
+
+</CodeGroup>
+
+---
+
+### move
+
+Move a function or class to a different file.
+
+**Syntax:**
+```bash
+curd refactor move <SYMBOL> <TARGET_FILE> [OPTIONS]
+```
+
+<ParamField path="symbol" type="string" required>
+  The symbol URI to move
+</ParamField>
+
+<ParamField path="target_file" type="path" required>
+  Destination file path (relative to workspace root)
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root
+</ParamField>
+
+**Behavior:**
+- Removes symbol from source file
+- Adds symbol to target file
+- Updates imports in both files
+- Updates all references across workspace
+- Preserves documentation and attributes
+
+**Examples:**
+
+<CodeGroup>
+
+```bash Move Function
+# Move a utility function
+curd session begin
+curd refactor move src/main.rs::helper_function src/utils.rs
+curd session commit
+```
+
+```bash Move Class
+# Reorganize class location
+curd session begin
+curd refactor move src/lib.rs::Config src/config/mod.rs
+curd session commit
+```
+
+</CodeGroup>
+
+---
+
+### extract
+
+Extract a code range into a new function.
+
+**Syntax:**
+```bash
+curd refactor extract <FILE_RANGE> <NEW_FUNCTION_NAME> [OPTIONS]
+```
+
+<ParamField path="file_range" type="string" required>
+  File path and line range (e.g., `src/main.rs:10-20`)
+</ParamField>
+
+<ParamField path="new_function_name" type="string" required>
+  Name for the extracted function
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root
+</ParamField>
+
+**Behavior:**
+- Analyzes variable usage in selected range
+- Determines function parameters and return type
+- Creates new function with extracted code
+- Replaces original code with function call
+- Preserves variable scope and semantics
+
+**Examples:**
+
+<CodeGroup>
+
+```bash Extract Function
+# Extract lines 10-20 into new function
+curd session begin
+curd refactor extract src/main.rs:10-20 validate_input
+curd session commit
+```
+
+```bash Extract Complex Logic
+# Extract complex block
+curd session begin
+curd refactor extract src/api.rs:142-189 handle_authentication
+curd session commit
+```
+
+</CodeGroup>
+
+---
+
+## Interactive Overload Resolution
+
+When renaming overloaded symbols:
+
+```bash
+curd refactor rename src/api.rs::new NewConstructor
+
+Symbol 'new' is overloaded.
+Available options:
+  1. src/api.rs::Router::new:5 : impl Router
+  2. src/api.rs::Handler::new:42 : impl Handler
+  3. src/api.rs::Config::new:89 : impl Config
+
+Select which overloads to rename (Space to select, Enter to confirm):
+[x] 1. src/api.rs::Router::new:5
+[ ] 2. src/api.rs::Handler::new:42
+[x] 3. src/api.rs::Config::new:89
+```
+
+## LSP Integration
+
+Use Language Server Protocol for enhanced refactoring:
+
+```bash
+# Rust with rust-analyzer
+curd refactor rename src/lib.rs::process_data transform_data --lsp rust-analyzer
+
+# TypeScript with tsserver
+curd refactor rename src/index.ts::handleEvent processEvent --lsp typescript-language-server
+```
+
+**Benefits:**
+- Type-aware renaming
+- Cross-crate/package references
+- Macro expansion support
+- Import auto-updates
+
+## Common Workflows
+
+### API Refactoring
+
+```bash
+curd session begin
+
+# Rename public API
+curd refactor rename src/api.rs::old_endpoint new_endpoint
+
+# Move implementation
+curd refactor move src/api.rs::helper src/api/helpers.rs
+
+# Review changes
+curd session review
+
+# Test
+curd build test
+
+# Commit
+curd session commit
+```
+
+### Extract Reusable Logic
+
+```bash
+curd session begin
+
+# Extract repeated code
+curd refactor extract src/main.rs:50-75 validate_config
+
+# Move to utils module
+curd refactor move src/main.rs::validate_config src/utils.rs
+
+# Commit
+curd session commit
+```
+
+### Large-Scale Rename
+
+```bash
+curd session begin
+
+# Rename across entire codebase
+curd refactor rename src/types.rs::User UserAccount --lsp rust-analyzer
+
+# Verify all references updated
+curd search UserAccount
+curd search User  # Should find no old references
+
+# Test
+curd test all
+
+# Commit
+curd session commit
+```
+
+### Reorganize Module Structure
+
+```bash
+curd session begin
+
+# Move multiple functions
+curd refactor move src/lib.rs::parse_config src/config/parser.rs
+curd refactor move src/lib.rs::validate_config src/config/validator.rs
+curd refactor move src/lib.rs::load_config src/config/loader.rs
+
+# Update module names
+curd refactor rename src/config/mod.rs::Config ConfigManager
+
+# Commit
+curd session commit
+```
+
+## Impact Analysis
+
+Before refactoring, analyze impact:
+
+```bash
+# Check dependencies
+curd graph src/api.rs::old_function --depth 3
+
+# Count references
+curd search old_function
+
+# Review architectural impact
+curd test architecture
+```
+
+## Session Integration
+
+Refactoring **requires an active shadow transaction**:
+
+```bash
+# ERROR: No session
+curd refactor rename src/main.rs::foo bar
+# Error: No active shadow transaction. Run 'curd session begin' first.
+
+# CORRECT: With session
+curd session begin
+curd refactor rename src/main.rs::foo bar
+curd session commit
+```
+
+## Conflict Resolution
+
+If refactoring causes conflicts:
+
+```bash
+curd session commit
+# Warning: Conflict detected in src/api.rs
+# Attempting three-way merge...
+# ✗ Cannot auto-resolve conflict at line 42
+
+# Option 1: Fix manually
+vim src/api.rs
+curd session commit
+
+# Option 2: Rollback and retry
+curd session rollback
+```
+
+## Performance Notes
+
+- **Rename:** Depends on reference count (typically &lt;1s)
+- **Move:** Fast for single symbols (milliseconds)
+- **Extract:** Requires dataflow analysis (1-5s)
+- **LSP mode:** May be slower but more accurate
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Symbol not found">
+    Verify the symbol exists:
+    ```bash
+    curd search symbol_name
+    curd read src/file.rs::symbol_name
+    ```
+    
+    Check URI format:
+    ```bash
+    # Correct
+    src/main.rs::function_name
+    
+    # Incorrect
+    src/main.rs:function_name  # Missing colon
+    ```
+  </Accordion>
+
+  <Accordion title="References not updated">
+    Use LSP mode for comprehensive updates:
+    ```bash
+    curd refactor rename src/lib.rs::Symbol NewSymbol --lsp rust-analyzer
+    ```
+    
+    Or check index quality:
+    ```bash
+    curd test edges --verbose
+    ```
+  </Accordion>
+
+  <Accordion title="Extract function fails">
+    Ensure the range is valid:
+    ```bash
+    # View the file
+    curd read src/main.rs
+    
+    # Extract valid range
+    curd refactor extract src/main.rs:10-20 new_func
+    ```
+    
+    Check for syntax errors in range.
+  </Accordion>
+
+  <Accordion title="LSP binary not found">
+    Install the language server:
+    ```bash
+    # Rust
+    rustup component add rust-analyzer
+    
+    # TypeScript
+    npm install -g typescript-language-server
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd session](/commands/session) - Manage transactions
+- [curd edit](/commands/edit) - Manual edits
+- [curd graph](/commands/graph) - Analyze dependencies
+- [curd search](/commands/search) - Find references

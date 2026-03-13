@@ -1,0 +1,464 @@
+---
+title: 'Policy Enforcement'
+description: 'Security policy, blocklists, allowlists, and execution controls'
+icon: 'shield'
+---
+
+## Overview
+
+CURD's policy engine enforces **security boundaries**, **access control**, and **operational constraints** for all tool calls, whether from humans, agents, or automated workflows.
+
+<Info>
+Policy enforcement is **defense-in-depth**: even if a profile grants a capability, policy rules can still deny access based on file paths, command patterns, or execution context.
+</Info>
+
+## Policy Configuration
+
+The `[policy]` section defines security rules:
+
+```toml settings.toml
+[policy]
+mode = "permissive"  # strict | permissive | audit
+
+# File Access Control
+block_files = [
+  "**/secrets.toml",
+  "credentials.json",
+  ".env*"
+]
+allow_files = [
+  "src/**/*.rs",
+  "tests/**/*.rs"
+]
+
+# Symbol Protection
+protected_symbols = [
+  "auth::verify_token",
+  "db::execute_raw_sql"
+]
+
+# Plan Enforcement
+require_plan_for_mutations = false
+
+# Shell Security
+allowed_binaries = ["cargo", "npm", "python", "make"]
+block_shell_metachars = true
+```
+
+Source: `curd-core/src/policy.rs:6-34`
+
+## Policy Modes
+
+<ParamField path="mode" type="string" default="permissive">
+  Global policy enforcement mode:
+  
+  - **`permissive`**: Allow by default, block only explicit violations
+  - **`strict`**: Deny by default, require explicit allow rules
+  - **`audit`**: Allow all, but log policy decisions for review
+</ParamField>
+
+### Mode Behavior
+
+| Mode | Default | Blocklist | Allowlist | Use Case |
+|------|---------|-----------|-----------|----------|
+| `permissive` | Allow | Blocks matches | Explicit allow | Development, trusted environments |
+| `strict` | Deny | Blocks matches | Required for access | Production, high-security |
+| `audit` | Allow | Logs only | Not checked | Compliance monitoring |
+
+Source: `curd-core/src/policy.rs:282-302`
+
+<Warning>
+**Strict Mode:** In strict mode, file operations require an explicit `allow_files` entry. This is recommended for production CI/CD environments.
+</Warning>
+
+## File Access Control
+
+### Blocklist
+
+Prevent access to sensitive files:
+
+```toml settings.toml
+[policy]
+block_files = [
+  "**/secret*.toml",
+  "**/credentials.json",
+  ".env",
+  ".env.*",
+  "**/.git/**",
+  "**/.curd/**"  # CURD internal state is always protected
+]
+```
+
+<Note>
+Blocklist patterns use glob syntax and are checked **before** allowlist patterns (highest priority).
+</Note>
+
+Source: `curd-core/src/policy.rs:243-253`
+
+### Allowlist
+
+In strict mode, only listed paths are accessible:
+
+```toml settings.toml
+[policy]
+mode = "strict"
+allow_files = [
+  "src/**/*.rs",
+  "src/**/*.toml",
+  "tests/**/*",
+  "docs/**/*.md"
+]
+```
+
+Source: `curd-core/src/policy.rs:255-267`
+
+### Immutable Infrastructure
+
+CURD **always** blocks AI agents from modifying configuration:
+
+```rust
+// From curd-core/src/policy.rs:200-209
+if !is_human {
+    if is_config_file(path) {
+        return PolicyDecision::Deny(
+            "SECURITY_VIOLATION: AI agents are strictly forbidden 
+             from modifying CURD configuration files or internal state."
+        );
+    }
+}
+```
+
+**Protected paths:**
+- `curd.toml`, `settings.toml`
+- `.curd/**` directory
+- Any shell command attempting to modify these files
+
+Source: `curd-core/src/policy.rs:200-240`, `curd-core/src/policy.rs:523-548`
+
+## Symbol Protection
+
+Mark critical functions as off-limits:
+
+```toml settings.toml
+[policy]
+protected_symbols = [
+  "auth::verify_user",
+  "crypto::decrypt",
+  "db::raw_query"
+]
+```
+
+Protected symbols cannot be edited by AI agents:
+
+```rust
+// From curd-core/src/policy.rs:270-279
+if tool == "edit" {
+    if let Some(uri) = params.get("uri") {
+        if config.protected_symbols.iter().any(|s| s == uri) {
+            return PolicyDecision::Deny(
+                format!("SYMBOL_PROTECTED: '{}' is marked as mission-critical", uri)
+            );
+        }
+    }
+}
+```
+
+Source: `curd-core/src/policy.rs:269-279`
+
+<Tip>
+Use symbol protection for security-critical code, public APIs, or integration points where regressions would be catastrophic.
+</Tip>
+
+## Shell Execution Policy
+
+### Allowed Binaries
+
+Restrict which programs can be executed:
+
+```toml settings.toml
+[policy]
+allowed_binaries = [
+  "cargo", "rustc",
+  "npm", "yarn", "pnpm", "node",
+  "python", "python3", "pytest",
+  "make", "cmake", "ninja",
+  "go", "gcc", "clang"
+]
+```
+
+CURD extracts the program name and checks the list:
+
+```rust
+// From curd-core/src/policy.rs:229-237
+let program = cmd.split_whitespace().next().unwrap_or("");
+if !allowed_binaries.iter().any(|b| b == program) {
+    return PolicyDecision::Deny(
+        format!("Command '{}' is not in the allowed binaries list", program)
+    );
+}
+```
+
+Source: `curd-core/src/policy.rs:80-89`, `curd-core/src/policy.rs:229-237`
+
+### Metacharacter Blocking
+
+Prevent shell injection via command chaining:
+
+```toml settings.toml
+[policy]
+block_shell_metachars = true  # Block: ; & | ` $( )
+```
+
+Blocked patterns:
+- `;` (command chaining)
+- `&` (background execution)
+- `|` (pipes)
+- `` ` `` (backticks)
+- `$(` (command substitution)
+
+Source: `curd-core/src/policy.rs:217-227`
+
+<Warning>
+**Command Injection Defense:** Even if an agent has `exec.command` capability, policy blocks dangerous shell metacharacters to prevent privilege escalation.
+</Warning>
+
+## Execution Policy
+
+The `[policy.exec]` subsection controls command execution:
+
+```toml settings.toml
+[policy.exec]
+allow_raw_command = false    # Require predefined tasks only
+allow_background = true      # Allow background processes
+```
+
+<ParamField path="allow_raw_command" type="boolean" default="false">
+  If `false`, agents cannot execute arbitrary shell commands—only predefined build tasks are allowed.
+  
+  **Recommended:** Set to `false` in production to prevent arbitrary code execution.
+</ParamField>
+
+<ParamField path="allow_background" type="boolean" default="true">
+  Allow background shell processes (e.g., `sleep 10 &`)
+</ParamField>
+
+Source: `curd-core/src/policy.rs:54-60`, `curd-core/src/policy.rs:114-120`
+
+### Background Process Blocking
+
+```rust
+// From curd-core/src/policy.rs:345-356
+if input.tool == "shell"
+    && params.get("is_background").and_then(|v| v.as_bool()).unwrap_or(false)
+    && !config.exec.allow_background
+{
+    return PolicyDecision::Deny(
+        "POLICY_DENIED: background execution is disabled by [policy.exec]."
+    );
+}
+```
+
+Source: `curd-core/src/policy.rs:345-356`
+
+## Change Policy
+
+The `[policy.change]` subsection controls mutation boundaries:
+
+```toml settings.toml
+[policy.change]
+max_nodes_touched = 25
+max_edges_touched = 100
+require_review_for_interface_hash_changes = true
+forbid_entrypoint_deletion = false
+```
+
+<ParamField path="max_nodes_touched" type="number" default="25">
+  Maximum graph nodes that can be modified in a single commit (protects against large-scale refactors)
+</ParamField>
+
+<ParamField path="max_edges_touched" type="number" default="100">
+  Maximum call graph edges affected by a commit
+</ParamField>
+
+<ParamField path="require_review_for_interface_hash_changes" type="boolean" default="true">
+  Require human review if a public interface hash changes (breaking change detection)
+</ParamField>
+
+<ParamField path="forbid_entrypoint_deletion" type="boolean" default="false">
+  Block deletion of entrypoint symbols (e.g., `main`, `lib.rs::pub fn`)
+</ParamField>
+
+Source: `curd-core/src/policy.rs:42-52`, `curd-core/src/policy.rs:103-112`
+
+## Hooks Policy
+
+Control pre-commit and post-commit hooks:
+
+```toml settings.toml
+[policy.hooks]
+allow_review_hooks = true
+allow_mutating_hooks = false
+```
+
+<ParamField path="allow_review_hooks" type="boolean" default="true">
+  Allow read-only review hooks (e.g., linters, type checkers)
+</ParamField>
+
+<ParamField path="allow_mutating_hooks" type="boolean" default="false">
+  Allow hooks that modify code (e.g., auto-formatters)
+  
+  **Security note:** Mutating hooks can bypass review workflows—enable with caution.
+</ParamField>
+
+Source: `curd-core/src/policy.rs:62-68`, `curd-core/src/policy.rs:122-129`
+
+## Plan Validation
+
+CURD validates entire execution plans before registration:
+
+```rust
+// From curd-core/src/policy.rs:406-483
+pub fn validate_plan(
+    &self,
+    plan: &Plan,
+    is_human: bool,
+    workspace_root: &Path,
+) -> PolicyDecision {
+    // Limits enforced:
+    // - MAX_PLAN_NODES: 128
+    // - MAX_PLAN_DEPENDENCIES: 32 per node
+    // - MAX_PLAN_RETRY_LIMIT: 3
+    // - MAX_PLAN_OUTPUT_LIMIT_BYTES: 1 MB
+    // ...
+}
+```
+
+**Plan Constraints:**
+- Max 128 nodes per plan
+- Max 32 dependencies per node
+- Max 3 retry attempts per node
+- Max 1 MB output per node
+
+Source: `curd-core/src/policy.rs:157-160`, `curd-core/src/policy.rs:406-483`
+
+<Info>
+Plan validation prevents resource exhaustion attacks (e.g., plans with infinite retry loops or unbounded output).
+</Info>
+
+## Sandbox Enforcement
+
+All file operations are **sandbox-validated**:
+
+```rust
+// From curd-core/src/policy.rs:206-209
+if path.starts_with("..") || path.is_absolute() && !path.starts_with(workspace_root) {
+    return PolicyDecision::Deny(
+        "SANDBOX_VIOLATION: Path escapes workspace root."
+    );
+}
+```
+
+**Blocked patterns:**
+- `../../../etc/passwd` (parent directory escape)
+- `/etc/shadow` (absolute path outside workspace)
+- Symlink escapes (resolved before check)
+
+Source: `curd-core/src/policy.rs:206-209`, `curd-core/src/policy.rs:499-521`
+
+## Decision Flow
+
+Policy evaluation follows this order:
+
+```
+1. Immutable Infrastructure Check (ALWAYS enforced)
+   ↓ (if AI agent)
+2. Sandbox Validation (path escapes, config tampering)
+   ↓
+3. Blocklist Check (highest priority)
+   ↓ (if match: DENY)
+4. Allowlist Check (if configured)
+   ↓ (if match: ALLOW early exit)
+5. Protected Symbols Check
+   ↓
+6. Fallback Mode (strict/permissive/audit)
+   ↓
+Final Decision: ALLOW / DENY / AUDIT
+```
+
+Source: `curd-core/src/policy.rs:189-403`
+
+## Example: Production Policy
+
+```toml settings.toml
+[policy]
+mode = "strict"
+
+# Only allow source files and docs
+allow_files = [
+  "src/**/*.rs",
+  "tests/**/*.rs",
+  "benches/**/*.rs",
+  "docs/**/*.md"
+]
+
+# Block sensitive files
+block_files = [
+  "**/secrets*.toml",
+  "**/credentials*.json",
+  ".env*",
+  "**/.git/**"
+]
+
+# Protect critical security functions
+protected_symbols = [
+  "auth::verify",
+  "crypto::sign",
+  "db::raw_query"
+]
+
+# Shell restrictions
+allowed_binaries = ["cargo", "rustc", "make"]
+block_shell_metachars = true
+
+[policy.exec]
+allow_raw_command = false
+allow_background = false
+
+[policy.change]
+max_nodes_touched = 15
+require_review_for_interface_hash_changes = true
+forbid_entrypoint_deletion = true
+
+[policy.hooks]
+allow_review_hooks = true
+allow_mutating_hooks = false
+```
+
+## Validation
+
+Check policy configuration:
+
+```bash
+curd doctor . --strict
+```
+
+**Common Errors:**
+
+- `POLICY_DENIED`: File blocked by blocklist
+- `SANDBOX_VIOLATION`: Path escape attempt
+- `SECURITY_VIOLATION`: Config tampering detected
+- `SYMBOL_PROTECTED`: Attempt to edit protected symbol
+
+## See Also
+
+<CardGroup cols={3}>
+  <Card title="Profiles" icon="user-group" href="/configuration/profiles">
+    Role-based access control
+  </Card>
+  <Card title="Settings" icon="sliders" href="/configuration/settings">
+    Core configuration
+  </Card>
+  <Card title="Build Adapters" icon="hammer" href="/configuration/build-adapters">
+    Build system integration
+  </Card>
+</CardGroup>

@@ -1,0 +1,422 @@
+---
+title: 'manage_file'
+description: 'File system operations (create, delete, rename)'
+---
+
+## Description
+
+The `manage_file` tool provides safe file system operations strictly bounded to the workspace. All operations respect `.curd` directory protection and sandbox validation.
+
+<Warning>
+**Session Required**: All file mutations require an active workspace session to ensure atomicity and rollback support.
+</Warning>
+
+## Request Parameters
+
+<ParamField path="uri" type="string" required>
+  Target file path (relative to workspace root)
+</ParamField>
+
+<ParamField path="action" type="string" required>
+  File operation:
+  - `create` - Create empty file (fails if exists)
+  - `write` - Write content to file (creates or overwrites)
+  - `delete` - Delete file or directory
+  - `rename` - Move/rename file
+</ParamField>
+
+<ParamField path="destination" type="string">
+  Destination path for `rename` action, or file content for `write` action
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile for capability checks
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"`
+</ResponseField>
+
+<ResponseField name="action" type="string" required>
+  Operation performed: `create`, `write`, `delete`, `rename`
+</ResponseField>
+
+<ResponseField name="path" type="string">
+  Target file path (for `create`, `write`, `delete`)
+</ResponseField>
+
+<ResponseField name="source" type="string">
+  Source path (for `rename`)
+</ResponseField>
+
+<ResponseField name="destination" type="string">
+  Destination path (for `rename`)
+</ResponseField>
+
+<ResponseField name="bytes" type="number">
+  Bytes written (for `write`)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json Create Empty File
+{
+  "uri": "src/new_module.rs",
+  "action": "create"
+}
+```
+
+```json Write File Content
+{
+  "uri": "config.toml",
+  "action": "write",
+  "destination": "[server]\nport = 8080\n"
+}
+```
+
+```json Delete File
+{
+  "uri": "src/deprecated.rs",
+  "action": "delete"
+}
+```
+
+```json Rename File
+{
+  "uri": "src/old_name.rs",
+  "action": "rename",
+  "destination": "src/new_name.rs"
+}
+```
+
+```json Delete Directory
+{
+  "uri": "generated/",
+  "action": "delete"
+}
+```
+
+</CodeGroup>
+
+### Response Examples
+
+```json Created
+{
+  "status": "ok",
+  "action": "create",
+  "path": "src/new_module.rs"
+}
+```
+
+```json Written
+{
+  "status": "ok",
+  "action": "write",
+  "path": "config.toml",
+  "bytes": 28
+}
+```
+
+```json Deleted
+{
+  "status": "ok",
+  "action": "delete",
+  "path": "src/deprecated.rs"
+}
+```
+
+```json Renamed
+{
+  "status": "ok",
+  "action": "rename",
+  "source": "src/old_name.rs",
+  "destination": "src/new_name.rs"
+}
+```
+
+## Actions
+
+### create
+
+Create an empty file. Parent directories are created automatically.
+
+#### Behavior
+
+- Creates parent directories if missing
+- **Fails** if file already exists
+- Invalidates symbol index
+
+#### Error Example
+
+```json
+{
+  "error": "Cannot create file 'src/existing.rs', it already exists."
+}
+```
+
+---
+
+### write
+
+Write content to a file (creates or overwrites).
+
+#### Parameters
+
+- `destination` - File content (required)
+
+#### Behavior
+
+- Creates parent directories if missing
+- **Overwrites** if file exists
+- Invalidates symbol index
+
+#### Example
+
+```json
+{
+  "uri": "README.md",
+  "action": "write",
+  "destination": "# My Project\n\nDescription here.\n"
+}
+```
+
+---
+
+### delete
+
+Delete a file or directory recursively.
+
+#### Behavior
+
+- Deletes files with `remove_file`
+- Deletes directories recursively with `remove_dir_all`
+- **Fails** if path doesn't exist
+- Invalidates symbol index
+
+#### Error Example
+
+```json
+{
+  "error": "Cannot delete file 'src/missing.rs', it does not exist."
+}
+```
+
+---
+
+### rename
+
+Move or rename a file.
+
+#### Parameters
+
+- `destination` - Target path (required)
+
+#### Behavior
+
+- Creates parent directories for destination if missing
+- **Fails** if source doesn't exist
+- **Fails** if destination already exists
+- Invalidates symbol index
+
+#### Example
+
+```json
+{
+  "uri": "src/models/user.rs",
+  "action": "rename",
+  "destination": "src/models/account.rs"
+}
+```
+
+#### Error Examples
+
+```json Source not found
+{
+  "error": "Cannot rename 'src/missing.rs', it does not exist."
+}
+```
+
+```json Destination exists
+{
+  "error": "Cannot rename to 'src/existing.rs', destination already exists."
+}
+```
+
+## Sandbox Validation
+
+All paths are validated against workspace boundaries:
+
+### Blocked Patterns
+
+- **Traversal attempts**: `../`, `..\\`
+- **Absolute paths**: `/`, `C:\\`
+- **Home expansion**: `~`
+- **`.env` files**: Any file named `.env` or ending with `.env`
+- **`.curd` directory**: Internal state directory
+
+### Error Examples
+
+```json Traversal attempt
+{
+  "uri": "../../etc/passwd",
+  "action": "delete"
+}
+// Error: "Path '../../etc/passwd' contains traversal attempts..."
+```
+
+```json Absolute path
+{
+  "uri": "/usr/bin/malicious",
+  "action": "write"
+}
+// Error: "Path '/usr/bin/malicious' contains ... absolute roots."
+```
+
+```json .env protection
+{
+  "uri": ".env",
+  "action": "delete"
+}
+// Error: "Access to .env files is strictly prohibited."
+```
+
+```json .curd protection
+{
+  "uri": ".curd/settings.toml",
+  "action": "write"
+}
+// Error: "Access to the internal '.curd' directory is strictly prohibited..."
+```
+
+## Session Requirements
+
+All file operations require an active session:
+
+```json Without session
+{
+  "uri": "src/new.rs",
+  "action": "create"
+}
+// Error: "Cannot edit 'src/new.rs': Workspace is locked by another active session..."
+```
+
+```json With session
+// 1. Begin session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Create file (goes to shadow workspace)
+{"tool": "manage_file", "uri": "src/new.rs", "action": "create"}
+
+// 3. Commit
+{"tool": "workspace", "action": "commit"}
+```
+
+## Shadow Workspace
+
+When a transaction is active, all file operations affect the shadow workspace:
+
+```json
+// 1. Start session
+{"tool": "workspace", "action": "begin"}
+
+// 2. Create file (shadow only)
+{"tool": "manage_file", "uri": "src/temp.rs", "action": "create"}
+
+// 3. Verify in shadow
+{"tool": "read", "uris": ["src/temp.rs"]}
+// ✅ File exists in shadow
+
+// 4. Rollback (file never touches real workspace)
+{"tool": "workspace", "action": "rollback"}
+```
+
+## Automatic Index Invalidation
+
+All successful operations automatically invalidate the symbol index for affected files:
+
+- `create` / `write` - Invalidates new file
+- `delete` - Invalidates deleted file
+- `rename` - Invalidates both source and destination
+
+Subsequent `search` or `graph` queries will rebuild the index.
+
+## Binary vs Text Operations
+
+The `write` action treats `destination` as a text string. For binary files, use the `shell` tool:
+
+```json Binary file via shell
+{
+  "tool": "shell",
+  "command": "cp /path/to/image.png assets/"
+}
+```
+
+## Use Cases
+
+### Scaffolding New Files
+
+```json
+{"tool": "workspace", "action": "begin"}
+
+{"tool": "manage_file", "uri": "src/models/user.rs", "action": "create"}
+{"tool": "edit", "uri": "src/models/user.rs", "code": "pub struct User {...}"}
+
+{"tool": "workspace", "action": "commit"}
+```
+
+### Cleanup Tasks
+
+```json
+{"tool": "workspace", "action": "begin"}
+
+{"tool": "manage_file", "uri": "target/", "action": "delete"}
+{"tool": "manage_file", "uri": "node_modules/", "action": "delete"}
+
+{"tool": "workspace", "action": "commit"}
+```
+
+### File Restructuring
+
+```json
+{"tool": "workspace", "action": "begin"}
+
+{"tool": "manage_file", "uri": "src/old_module.rs", "action": "rename", "destination": "src/new_module.rs"}
+{"tool": "edit", "uri": "src/lib.rs", "code": "mod new_module;"}
+
+{"tool": "workspace", "action": "commit"}
+```
+
+## Comparison with `edit`
+
+| Feature | `manage_file` | `edit` |
+|---------|---------------|--------|
+| **Purpose** | File-level operations | Symbol-level code editing |
+| **Granularity** | Whole files | Functions/classes |
+| **Create empty file** | ✅ | ❌ |
+| **Delete file** | ✅ | ❌ (deletes symbol only) |
+| **Rename file** | ✅ | ❌ |
+| **Edit function** | ❌ | ✅ |
+| **AST churn check** | ❌ | ✅ |
+| **Session required** | ✅ | ✅ |
+
+<Tip>
+Use `manage_file` for file-level operations, `edit` for precise code changes.
+</Tip>
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="edit" icon="pen-to-square" href="/api/tools/edit">
+    Symbol-level code editing
+  </Card>
+  <Card title="workspace" icon="folder-tree" href="/api/tools/workspace">
+    Manage file operation sessions
+  </Card>
+  <Card title="shell" icon="terminal" href="/api/tools/shell">
+    Binary file operations via shell
+  </Card>
+</CardGroup>

@@ -1,0 +1,306 @@
+---
+title: Sandboxing
+description: Secure execution environment for shell commands and subprocess operations
+---
+
+## Overview
+
+CURD implements OS-native sandboxing to isolate shell commands and debugging operations from the host system. This prevents malicious or buggy scripts from accessing sensitive data, modifying system files, or exfiltrating credentials.
+
+## Sandbox Architecture
+
+CURD's sandbox layer (`curd-core/src/sandbox.rs`) wraps all shell and debug operations with platform-specific isolation mechanisms:
+
+```rust
+pub struct Sandbox {
+    pub workspace_root: PathBuf,
+}
+```
+
+The sandbox enforces:
+- **Filesystem isolation**: Read-only system files, write access limited to workspace
+- **Network control**: Optional network isolation (platform-dependent)
+- **Environment sanitization**: Strips sensitive environment variables
+- **Resource limits**: Memory and process constraints (Linux only)
+
+<Info>
+  Sandboxing is **always enabled** and cannot be disabled. To bypass restrictions, use Docker mode with a custom image.
+</Info>
+
+## Platform-Specific Implementations
+
+### Linux (bwrap)
+
+CURD uses **Bubblewrap** (`bwrap`) for Linux sandboxing:
+
+```bash
+bwrap \
+  --ro-bind / /              # Read-only root filesystem
+  --bind /workspace /workspace  # Writable workspace
+  --dev /dev \
+  --tmpfs /tmp \
+  --proc /proc \
+  --unshare-all \
+  --share-net \
+  --limit-as 2G \
+  --chdir /workspace \
+  bash -c "your_command"
+```
+
+**Key features:**
+- Read-only bind mount for entire root filesystem
+- Writable bind mount limited to workspace directory
+- Network namespace unsharing (can be configured via `--unshare-net`)
+- 2GB address space limit
+- Isolated PID, user, and IPC namespaces
+
+**Installation:**
+
+<CodeGroup>
+
+```bash Ubuntu/Debian
+sudo apt-get install bubblewrap
+```
+
+```bash Fedora/RHEL
+sudo dnf install bubblewrap
+```
+
+```bash Arch Linux
+sudo pacman -S bubblewrap
+```
+
+</CodeGroup>
+
+### macOS (sandbox-exec)
+
+CURD uses Apple's **Sandbox Profile Language** via `sandbox-exec`:
+
+```scheme
+(version 1)
+(deny default)
+(allow file-read* (subpath "/usr/lib"))
+(allow file-read* (subpath "/usr/share"))
+(allow file-read* (subpath "/System/Library"))
+(allow file-read* file-write* (subpath "/workspace"))
+(allow file-write* (subpath "/tmp"))
+(allow process-fork)
+(allow process-exec)
+(allow mach-lookup)
+(allow sysctl-read)
+```
+
+**Permissions granted:**
+- Read-only access to system libraries and frameworks
+- Read/write access to workspace and `/tmp`
+- Process spawning and execution
+- System call introspection
+
+**Limitations:**
+- No network isolation (macOS sandbox profiles lack this capability)
+- No memory limits (requires additional tools)
+- Built-in tool (no installation needed)
+
+### Windows (Not Implemented)
+
+CURD does **not** provide native sandboxing on Windows. Use Docker mode (see below) for isolation:
+
+```toml
+# settings.toml
+[shell]
+docker_enabled = true
+container_engine = "docker"
+docker_image = "curd/sandbox:latest"
+```
+
+### Docker Fallback (All Platforms)
+
+For maximum portability or when native sandboxing is unavailable:
+
+```toml
+# settings.toml
+[shell]
+docker_enabled = true
+container_engine = "docker"  # or "podman"
+docker_image = "ubuntu:22.04"
+```
+
+CURD automatically wraps commands in:
+
+```bash
+docker run --rm \
+  -v /workspace:/workspace \
+  -w /workspace \
+  ubuntu:22.04 \
+  bash -c "your_command"
+```
+
+<Warning>
+  Docker mode has performance overhead due to container startup time. Use native sandboxing when possible.
+</Warning>
+
+## Environment Sanitization
+
+All sandbox implementations strip potentially dangerous environment variables:
+
+**Removed variables:**
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+- `GITHUB_TOKEN`, `GH_TOKEN`
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+- All variables matching `*_TOKEN`, `*_SECRET`, `*_KEY`
+
+**Preserved variables:**
+- `PATH`
+- `HOME`
+- `USER`
+- `TERM`
+- `LANG`
+- `SHELL`
+
+Customize the allowlist in `curd-core/src/sandbox.rs:188`:
+
+```rust
+for key in ["PATH", "TERM", "HOME", "LANG", "SHELL", "USER"] {
+    if let Ok(val) = std::env::var(key) {
+        c.env(key, val);
+    }
+}
+```
+
+## Configuration
+
+### Disable Network Access (Linux Only)
+
+Edit `curd-core/src/sandbox.rs:166` to enable `--unshare-net`:
+
+```rust
+.arg("--unshare-net")  // Uncomment this line
+```
+
+Recompile:
+
+```bash
+cargo build --release
+```
+
+### Custom Docker Image
+
+Use a hardened container with pre-installed tools:
+
+```dockerfile
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    git curl build-essential python3 nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+USER 1000:1000
+WORKDIR /workspace
+```
+
+Build and configure:
+
+```bash
+docker build -t my-curd-sandbox .
+```
+
+```toml
+# settings.toml
+[shell]
+docker_enabled = true
+docker_image = "my-curd-sandbox"
+```
+
+## Security Considerations
+
+### What Sandboxing Protects Against
+
+<Check>Access to files outside workspace directory</Check>
+<Check>Reading sensitive environment variables</Check>
+<Check>Privilege escalation via setuid binaries</Check>
+<Check>Kernel module loading</Check>
+<Check>Mounting filesystems</Check>
+
+### What Sandboxing Does NOT Protect Against
+
+<Warning>Network exfiltration (except Linux with `--unshare-net`)</Warning>
+<Warning>CPU/GPU resource exhaustion</Warning>
+<Warning>Disk space exhaustion within workspace</Warning>
+<Warning>Malicious code within allowed workspace writes</Warning>
+
+### Best Practices
+
+1. **Never disable sandboxing**: There is no legitimate reason to bypass isolation
+2. **Audit shell commands**: Review all `curd shell` operations in logs
+3. **Use read-only contexts**: Link external repositories with `--index` or `--read` flags
+4. **Enable transactional enforcement**: Set `enforce_transactional = true` in `settings.toml`
+5. **Monitor `.curd/shadow/`**: Inspect staged changes before committing
+
+## Troubleshooting
+
+### bwrap: No such file or directory
+
+**Problem**: Bubblewrap is not installed on Linux.
+
+**Solution**:
+```bash
+sudo apt-get install bubblewrap  # Ubuntu/Debian
+sudo dnf install bubblewrap      # Fedora/RHEL
+```
+
+### sandbox-exec: Operation not permitted
+
+**Problem**: macOS System Integrity Protection (SIP) is blocking sandbox profiles.
+
+**Solution**: This is expected behavior. SIP restricts certain sandbox operations but does not prevent basic isolation. If you need stronger isolation, use Docker mode.
+
+### Docker mode is slow
+
+**Problem**: Container startup overhead adds 1-3 seconds per command.
+
+**Solutions**:
+1. Switch to native sandboxing (Linux: `bwrap`, macOS: `sandbox-exec`)
+2. Use a lightweight base image (`alpine:latest` instead of `ubuntu:22.04`)
+3. Batch commands using plan execution to amortize startup cost
+
+### Commands fail with "Permission denied"
+
+**Problem**: Workspace directory is not writable inside sandbox.
+
+**Solution**: Ensure workspace path is correctly canonicalized:
+
+```bash
+cd $(pwd -P)  # Resolve symlinks
+curd shell run "ls -la"
+```
+
+## Implementation Reference
+
+Key files:
+- **`curd-core/src/sandbox.rs`**: Core sandboxing logic (lines 1-233)
+- **`curd-core/src/shell.rs`**: Shell tool integration
+- **`curd-core/src/debug.rs`**: Debug engine sandboxing
+- **`curd-core/src/profile.rs`**: Profiler sandboxing
+
+### API Example
+
+```rust
+use curd_core::Sandbox;
+
+let sandbox = Sandbox::new("/workspace");
+let cmd = sandbox.build_command("ls", &["-la".to_string()]);
+let output = cmd.output().await?;
+```
+
+For detailed API documentation, see [Sandbox API Reference](/advanced/sandboxing).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Shell Tool" icon="terminal" href="/api/tools/shell">
+    Learn how to execute sandboxed shell commands
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Diagnose and fix common sandbox issues
+  </Card>
+</CardGroup>

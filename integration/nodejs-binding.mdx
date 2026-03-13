@@ -1,0 +1,465 @@
+---
+title: "Node.js Binding"
+description: "Install and use CURD from JavaScript and TypeScript environments"
+icon: "node-js"
+---
+
+## Overview
+
+The `curd-node` package provides Node.js bindings for CURD, enabling you to:
+
+- Install CURD via `npm`, `yarn`, or `pnpm`
+- Run the CURD CLI from JavaScript/TypeScript projects
+- Use instant launchers like `bunx` or `npx` for zero-install execution
+- Integrate CURD into Node.js-based automation workflows and build pipelines
+
+<Info>
+  `curd-node` is a **thin wrapper** around the native Rust binary. It doesn't reimplement CURD—it locates and spawns the optimized native CLI.
+</Info>
+
+## Installation
+
+### Via npm
+
+```bash
+npm install curd-node
+```
+
+### Via yarn
+
+```bash
+yarn add curd-node
+```
+
+### Via pnpm
+
+```bash
+pnpm add curd-node
+```
+
+### Instant Execution (No Install)
+
+Run CURD directly without installing:
+
+```bash
+# Using Bun (fastest)
+bunx --bun curd-node --version
+bunx --bun curd-node search handle_connection
+
+# Using npx
+npx curd-node --version
+npx curd-node search alpha --mode symbol
+```
+
+<Tip>
+  `bunx` is significantly faster than `npx` for cold starts. Use it for CI/CD or quick one-off commands.
+</Tip>
+
+## Usage
+
+Once installed, the `curd` command is available in your Node.js project:
+
+```bash
+# In your project directory
+npx curd doctor .
+npx curd search alpha
+npx curd workspace begin
+npx curd edit src/index.ts::handleRequest --code "export function handleRequest() {}"
+npx curd workspace commit
+```
+
+## How It Works
+
+The Node.js binding implements a **binary location strategy** using `spawnSync`:
+
+<Steps>
+  <Step title="Check Local Build">
+    Looks for `../../target/release/curd` (monorepo development mode)
+  </Step>
+  
+  <Step title="Check PATH">
+    Falls back to `curd` in system PATH
+  </Step>
+  
+  <Step title="Error on Missing">
+    If neither exists, displays a clear error message
+  </Step>
+</Steps>
+
+### Source Code
+
+The wrapper is implemented in `curd-node/bin/curd.js`:
+
+```javascript
+#!/usr/bin/env node
+
+const { spawnSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+// Attempt to find the native binary if compiled locally
+const localBinary = path.resolve(__dirname, '../../target/release/curd');
+
+let command = 'curd';
+if (fs.existsSync(localBinary)) {
+    command = localBinary;
+}
+
+const args = process.argv.slice(2);
+
+const result = spawnSync(command, args, { stdio: 'inherit' });
+
+if (result.error) {
+    if (result.error.code === 'ENOENT') {
+        console.error('\x1b[31mError: Native `curd` binary not found in PATH.\x1b[0m');
+        console.error('Please ensure CURD is installed correctly.');
+        process.exit(1);
+    }
+    console.error(result.error);
+    process.exit(1);
+}
+
+process.exit(result.status ?? 0);
+```
+
+<Note>
+  The wrapper preserves all CLI behavior, including stdin/stdout streaming for MCP mode.
+</Note>
+
+## TypeScript Integration Examples
+
+### Subprocess Invocation
+
+```typescript
+import { spawnSync } from 'child_process';
+
+interface SearchResult {
+  uri: string;
+  line: number;
+  score: number;
+}
+
+function curdSearch(query: string, mode: string = 'symbol'): SearchResult[] {
+  const result = spawnSync(
+    'curd',
+    ['search', query, '--mode', mode, '--json'],
+    { encoding: 'utf-8' }
+  );
+
+  if (result.error) {
+    throw new Error(`CURD search failed: ${result.error.message}`);
+  }
+
+  const output = JSON.parse(result.stdout);
+  return output.results;
+}
+
+// Usage
+const results = curdSearch('handle_connection');
+results.forEach(hit => {
+  console.log(`${hit.uri}:${hit.line}`);
+});
+```
+
+### MCP Client Integration
+
+```typescript
+import { spawn, ChildProcess } from 'child_process';
+import * as readline from 'readline';
+
+class CurdMCPClient {
+  private process: ChildProcess;
+  private rl: readline.Interface;
+  private requestId: number = 0;
+
+  constructor(workspacePath: string) {
+    this.process = spawn('curd', ['run', workspacePath], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    this.rl = readline.createInterface({
+      input: this.process.stdout!,
+      crlfDelay: Infinity
+    });
+  }
+
+  async callTool(tool: string, args: Record<string, any>): Promise<any> {
+    this.requestId++;
+    const request = {
+      jsonrpc: '2.0',
+      id: this.requestId,
+      method: 'tools/call',
+      params: {
+        name: tool,
+        arguments: args
+      }
+    };
+
+    return new Promise((resolve, reject) => {
+      const listener = (line: string) => {
+        const response = JSON.parse(line);
+        if (response.id === this.requestId) {
+          this.rl.off('line', listener);
+          if (response.error) {
+            reject(new Error(response.error.message));
+          } else {
+            const content = response.result.content[0].text;
+            resolve(JSON.parse(content));
+          }
+        }
+      };
+
+      this.rl.on('line', listener);
+      this.process.stdin!.write(JSON.dumps(request) + '\n');
+    });
+  }
+
+  close() {
+    this.process.kill();
+  }
+}
+
+// Usage
+const client = new CurdMCPClient('.');
+const results = await client.callTool('search', {
+  query: 'alpha',
+  mode: 'symbol',
+  limit: 10
+});
+console.log(results);
+client.close();
+```
+
+### Build Script Integration
+
+```typescript
+// scripts/curd-validate.ts
+import { execSync } from 'child_process';
+
+function validateCodebase() {
+  console.log('🔍 Running CURD doctor...');
+  execSync('npx curd doctor .', { stdio: 'inherit' });
+
+  console.log('\n🔍 Checking semantic integrity...');
+  execSync('npx curd workspace begin', { stdio: 'inherit' });
+  
+  // Simulate some edits in your build process
+  
+  execSync('npx curd workspace diff', { stdio: 'inherit' });
+  execSync('npx curd workspace rollback', { stdio: 'inherit' });
+  
+  console.log('✅ Validation complete!');
+}
+
+validateCodebase();
+```
+
+### Express Middleware
+
+```typescript
+import express from 'express';
+import { spawnSync } from 'child_process';
+
+const app = express();
+
+app.get('/api/search', (req, res) => {
+  const { query, mode = 'symbol' } = req.query;
+  
+  if (!query) {
+    return res.status(400).json({ error: 'Missing query parameter' });
+  }
+
+  const result = spawnSync(
+    'curd',
+    ['search', query as string, '--mode', mode as string, '--json'],
+    { encoding: 'utf-8' }
+  );
+
+  if (result.error) {
+    return res.status(500).json({ error: result.error.message });
+  }
+
+  res.json(JSON.parse(result.stdout));
+});
+
+app.listen(3000, () => {
+  console.log('CURD API server running on port 3000');
+});
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+```yaml
+name: CURD Integration Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      
+      - name: Install CURD
+        run: npm install curd-node
+      
+      - name: Run CURD Doctor
+        run: npx curd doctor .
+      
+      - name: Semantic Search Test
+        run: npx curd search main --mode symbol --limit 5
+```
+
+### GitLab CI
+
+```yaml
+test:curd:
+  image: node:20
+  script:
+    - npm install curd-node
+    - npx curd doctor .
+    - npx curd search handle --mode symbol
+```
+
+### package.json Scripts
+
+```json
+{
+  "scripts": {
+    "curd:init": "curd init",
+    "curd:doctor": "curd doctor .",
+    "curd:search": "curd search",
+    "validate": "curd workspace begin && curd workspace diff && curd workspace rollback"
+  },
+  "devDependencies": {
+    "curd-node": "^0.7.1-beta"
+  }
+}
+```
+
+## Development Setup
+
+Clone and install for local development:
+
+```bash
+git clone https://github.com/aerospeedsta/curd.git
+cd curd/curd-node
+
+# Build the native binary first
+cd .. && cargo build --release
+
+# Install Node binding
+cd curd-node
+npm install
+npm link
+
+# Test
+curd --version
+```
+
+## Package Metadata
+
+**Package**: `curd-node`  
+**Version**: `0.7.1-beta`  
+**Main**: `index.js`  
+**Types**: `index.d.ts`  
+**Binary**: `curd` (via `bin/curd.js`)
+
+From `package.json`:
+
+```json
+{
+  "name": "curd-node",
+  "version": "0.7.1-beta",
+  "description": "Node.js bindings for CURD",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "curd": "./bin/curd.js"
+  },
+  "scripts": {
+    "build": "napi build --release",
+    "build:debug": "napi build"
+  }
+}
+```
+
+<Warning>
+  This package requires the CURD native binary to be installed separately or built from source. The wrapper alone is not sufficient.
+</Warning>
+
+## Comparison with Native Installation
+
+| Method | Best For | Installation Time | Compatibility |
+|--------|----------|-------------------|---------------|
+| **Native OS Package** | Production use | Fast (~1-2s) | Platform-specific |
+| **`curd-node`** | Node.js projects | Medium (~5-10s) | Cross-platform |
+| **`bunx` (instant)** | CI/CD, one-offs | Instant | Cross-platform |
+
+## Troubleshooting
+
+### "Binary not found in PATH"
+
+**Cause**: The native CURD binary isn't installed or isn't in your PATH.
+
+**Solution**:
+```bash
+# Option 1: Install native binary via Homebrew
+brew tap aerospeedsta/curd && brew install curd
+
+# Option 2: Build from source
+git clone https://github.com/aerospeedsta/curd.git
+cd curd && cargo build --release
+export PATH="$PWD/target/release:$PATH"
+
+# Verify
+curd --version
+```
+
+### Module Resolution Errors
+
+**Cause**: Incorrect Node.js environment or package not installed.
+
+**Solution**:
+```bash
+# Check installation
+npm list curd-node
+
+# Reinstall
+npm install --force curd-node
+```
+
+### Permission Denied (Unix)
+
+**Cause**: The wrapper script isn't executable.
+
+**Solution**:
+```bash
+chmod +x node_modules/curd-node/bin/curd.js
+```
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="MCP Server" href="/integration/mcp-server" icon="plug">
+    Connect to CURD via MCP protocol
+  </Card>
+  
+  <Card title="Python Binding" href="/integration/python-binding" icon="python">
+    Use CURD from Python environments
+  </Card>
+  
+  <Card title="Docker" href="/integration/docker" icon="docker">
+    Run CURD in containers
+  </Card>
+  
+  <Card title="CLI Reference" href="/commands/search" icon="terminal">
+    Complete CLI command documentation
+  </Card>
+</CardGroup>

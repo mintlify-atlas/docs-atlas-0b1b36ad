@@ -1,0 +1,521 @@
+---
+title: "Plugin Trust Management"
+description: "Manage Ed25519 signing keys and plugin verification policies"
+---
+
+CURD's plugin trust system uses Ed25519 cryptographic signatures to verify plugin authenticity. Before installing any plugin, you must add the signer's public key to your trusted key set.
+
+## Trust Model
+
+The trust system is based on:
+
+<CardGroup cols={2}>
+  <Card title="Ed25519 Signatures" icon="signature">
+    Each plugin package is signed with an Ed25519 private key
+  </Card>
+  <Card title="Trusted Key Set" icon="key">
+    Workspace maintains a list of trusted public keys
+  </Card>
+  <Card title="Kind Restrictions" icon="filter">
+    Keys can be restricted to specific plugin types (language/tool)
+  </Card>
+  <Card title="Key Lifecycle" icon="clock-rotate-left">
+    Keys can be enabled, disabled, or removed without reinstalling plugins
+  </Card>
+</CardGroup>
+
+## Trusted Key Configuration
+
+Trusted keys are stored in `.curd/plugin_trusted_keys.json`:
+
+```json
+{
+  "keys": [
+    {
+      "key_id": "acme-plugins",
+      "pubkey_hex": "a1b2c3d4e5f6...",
+      "label": "ACME Corporation Plugin Signing Key",
+      "added_at_secs": 1710331200,
+      "fingerprint_sha256": "sha256:abc123...",
+      "allowed_kinds": ["language", "tool"],
+      "enabled": true
+    },
+    {
+      "key_id": "vendor-langs",
+      "pubkey_hex": "f6e5d4c3b2a1...",
+      "label": "Vendor Language Plugins",
+      "added_at_secs": 1710417600,
+      "fingerprint_sha256": "sha256:def456...",
+      "allowed_kinds": ["language"],
+      "enabled": true
+    }
+  ]
+}
+```
+
+### Trusted Key Fields
+
+<ParamField path="key_id" type="string" required>
+  Unique identifier for this key (alphanumeric, hyphens, underscores, dots)
+  
+  Example: `"acme-plugins"`, `"vendor-langs"`, `"dev-key"`
+</ParamField>
+
+<ParamField path="pubkey_hex" type="string" required>
+  Ed25519 public key as 64-character hex string
+  
+  Example: `"a1b2c3d4e5f6..."`
+  
+  Generate from a private key with: `openssl pkey -in key.pem -pubout`
+</ParamField>
+
+<ParamField path="label" type="string">
+  Human-readable description of the key owner or purpose
+  
+  Example: `"ACME Corporation Plugin Signing Key"`
+</ParamField>
+
+<ParamField path="added_at_secs" type="integer" required>
+  Unix timestamp when the key was added
+  
+  Automatically set when creating the key
+</ParamField>
+
+<ParamField path="fingerprint_sha256" type="string" required>
+  SHA-256 fingerprint of the public key for verification
+  
+  Automatically computed when creating the key
+</ParamField>
+
+<ParamField path="allowed_kinds" type="array<string>">
+  Plugin types this key is allowed to sign
+  
+  Options: `["language"]`, `["tool"]`, or `["language", "tool"]`
+  
+  Empty array means all kinds are allowed
+</ParamField>
+
+<ParamField path="enabled" type="boolean" default="true">
+  Whether this key is currently active
+  
+  Disabled keys are ignored during plugin verification
+</ParamField>
+
+## Managing Trusted Keys
+
+### Add a Trusted Key
+
+```json
+{
+  "tool": "plugin_trust",
+  "args": {
+    "action": "add",
+    "key_id": "acme-plugins",
+    "pubkey_hex": "a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+    "label": "ACME Corporation Plugin Signing Key",
+    "allowed_kinds": ["language", "tool"]
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "status": "added",
+  "key_id": "acme-plugins",
+  "fingerprint_sha256": "sha256:abc123def456..."
+}
+```
+
+<Note>
+  The `fingerprint_sha256` is computed automatically and can be used to verify you added the correct key.
+</Note>
+
+### List Trusted Keys
+
+```json
+{
+  "tool": "plugin_trust",
+  "args": {
+    "action": "list"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "keys": [
+    {
+      "key_id": "acme-plugins",
+      "pubkey_hex": "a1b2c3...",
+      "label": "ACME Corporation Plugin Signing Key",
+      "added_at_secs": 1710331200,
+      "fingerprint_sha256": "sha256:abc123...",
+      "allowed_kinds": ["language", "tool"],
+      "enabled": true
+    }
+  ]
+}
+```
+
+### Disable a Key
+
+```json
+{
+  "tool": "plugin_trust",
+  "args": {
+    "action": "disable",
+    "key_id": "acme-plugins"
+  }
+}
+```
+
+<Info>
+  Disabling a key prevents new plugins from being installed with that key, but does not remove already-installed plugins.
+</Info>
+
+### Enable a Key
+
+```json
+{
+  "tool": "plugin_trust",
+  "args": {
+    "action": "enable",
+    "key_id": "acme-plugins"
+  }
+}
+```
+
+### Remove a Key
+
+```json
+{
+  "tool": "plugin_trust",
+  "args": {
+    "action": "remove",
+    "key_id": "acme-plugins"
+  }
+}
+```
+
+<Warning>
+  Removing a key does not uninstall plugins signed with that key. They remain installed and functional.
+</Warning>
+
+## Generating Signing Keys
+
+To sign your own plugins, generate an Ed25519 keypair:
+
+### Using OpenSSL
+
+```bash
+# Generate private key
+openssl genpkey -algorithm ed25519 -out signing.key
+
+# Extract public key as hex
+openssl pkey -in signing.key -pubout -outform DER | tail -c 32 | xxd -p -c 64
+```
+
+### Using Rust
+
+```rust
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::rngs::OsRng;
+
+let signing_key = SigningKey::generate(&mut OsRng);
+let verifying_key = signing_key.verifying_key();
+
+// Save private key (keep secure!)
+std::fs::write("signing.key", signing_key.to_bytes())?;
+
+// Public key hex for manifest
+let pubkey_hex = verifying_key.as_bytes()
+    .iter()
+    .map(|b| format!("{:02x}", b))
+    .collect::<String>();
+
+println!("Public key: {}", pubkey_hex);
+```
+
+### Using Python
+
+```python
+from cryptography.hazmat.primitives.asymmetric import ed25519
+import binascii
+
+# Generate keypair
+private_key = ed25519.Ed25519PrivateKey.generate()
+public_key = private_key.public_key()
+
+# Save private key (keep secure!)
+with open('signing.key', 'wb') as f:
+    f.write(private_key.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption()
+    ))
+
+# Public key hex
+pubkey_hex = binascii.hexlify(
+    public_key.public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw
+    )
+).decode('ascii')
+
+print(f"Public key: {pubkey_hex}")
+```
+
+<Warning>
+  **Never commit private keys to version control!** Store them securely and back them up safely. Loss of a private key means you cannot sign new versions of your plugins.
+</Warning>
+
+## Verification Process
+
+When installing a plugin, CURD performs these verification steps:
+
+<Steps>
+  <Step title="Load Trusted Keys">
+    Reads `.curd/plugin_trusted_keys.json` to get the trusted key set
+  </Step>
+  
+  <Step title="Find Matching Key">
+    Searches for a key where:
+    - `pubkey_hex` matches the plugin's `signer_pubkey_hex`
+    - `enabled` is `true`
+    - `allowed_kinds` is empty or includes the plugin's `kind`
+  </Step>
+  
+  <Step title="Verify Signature">
+    Uses Ed25519 to verify the `signature_hex` over the manifest JSON
+    
+    Specifically, CURD:
+    1. Serializes the manifest to canonical JSON
+    2. Verifies the signature using the public key
+    3. Rejects the plugin if verification fails
+  </Step>
+  
+  <Step title="Check Policy">
+    If `require_signatures = true` (default), unsigned plugins are rejected
+    
+    If `allow_unsigned_dev_plugins = true`, unsigned plugins from untrusted keys are allowed (development only)
+  </Step>
+</Steps>
+
+See [plugin_packages.rs:verify_signature_policy](https://github.com/aerospeedsta/curd/blob/main/curd-core/src/plugin_packages.rs) for implementation details.
+
+## Policy Configuration
+
+Trust policies are configured in `settings.toml`:
+
+```toml
+[plugins]
+require_signatures = true
+allow_unsigned_dev_plugins = false
+```
+
+### Policy Options
+
+<ResponseField name="require_signatures" type="boolean" default="true">
+  Enforce signature verification for all plugins
+  
+  When `true`:
+  - All plugins must have a valid `signature_hex`
+  - Signature must verify against the signer's public key
+  - Unsigned plugins are rejected
+  
+  When `false`:
+  - Plugins without signatures are allowed if policy permits
+  - Still requires matching trusted key for signed plugins
+</ResponseField>
+
+<ResponseField name="allow_unsigned_dev_plugins" type="boolean" default="false">
+  Allow unsigned or untrusted plugins for development
+  
+  When `true`:
+  - Plugins without matching trusted keys are allowed
+  - Useful for local plugin development
+  - **Not recommended for production environments**
+  
+  When `false`:
+  - All plugins must have a matching trusted key
+  - Provides maximum security
+</ResponseField>
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Key Management" icon="key">
+    - Generate keys on a secure, offline machine
+    - Store private keys in a password manager or HSM
+    - Use separate keys for different purposes (dev vs production)
+    - Rotate keys periodically and re-sign plugins
+  </Accordion>
+  
+  <Accordion title="Trust Policies" icon="shield-check">
+    - Keep `require_signatures = true` in production
+    - Only enable `allow_unsigned_dev_plugins` in development workspaces
+    - Limit `allowed_kinds` to minimize trust scope
+    - Disable or remove keys when no longer needed
+  </Accordion>
+  
+  <Accordion title="Verification" icon="magnifying-glass">
+    - Always review plugin source code before trusting a new key
+    - Verify fingerprints match expected values
+    - Check plugin manifest for suspicious permissions
+    - Audit installed plugins regularly with `plugin_* list`
+  </Accordion>
+  
+  <Accordion title="Distribution" icon="share-nodes">
+    - Publish public keys on your website or in documentation
+    - Include fingerprints for out-of-band verification
+    - Sign releases with the same key consistently
+    - Announce key rotations in release notes
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Signature verification failed">
+    **Symptoms**: `plugin archive signature verification failed` error
+    
+    **Causes**:
+    - Manifest was modified after signing
+    - Wrong private key used during packaging
+    - Signature corruption during transfer
+    
+    **Solutions**:
+    - Re-sign the plugin with the correct key
+    - Verify manifest JSON matches signed version
+    - Check file integrity (SHA-256 hash)
+  </Accordion>
+  
+  <Accordion title="Signer not in trusted key set">
+    **Symptoms**: `signer is not present in trusted plugin key set` error
+    
+    **Causes**: Public key not added to trusted keys
+    
+    **Solutions**:
+    - Use `plugin_trust` tool to add the signer's public key
+    - Verify `pubkey_hex` matches the key used for signing
+    - Check key is enabled and allows the plugin kind
+  </Accordion>
+  
+  <Accordion title="Invalid fingerprint">
+    **Symptoms**: `trusted plugin key has invalid fingerprint` error
+    
+    **Causes**: Fingerprint field doesn't match computed hash
+    
+    **Solutions**:
+    - Remove and re-add the key (fingerprint is auto-computed)
+    - Don't manually edit `plugin_trusted_keys.json`
+    - Use `plugin_trust` tool for all key operations
+  </Accordion>
+  
+  <Accordion title="Kind restriction mismatch">
+    **Symptoms**: Plugin installation rejected despite valid signature
+    
+    **Causes**: Key's `allowed_kinds` doesn't include plugin's `kind`
+    
+    **Solutions**:
+    - Update key with `plugin_trust` to allow the plugin kind
+    - Or create a separate key for that plugin type
+  </Accordion>
+</AccordionGroup>
+
+## Complete Example
+
+Here's a full workflow for creating, signing, and installing a trusted plugin:
+
+<Steps>
+  <Step title="Generate Signing Key">
+    ```bash
+    openssl genpkey -algorithm ed25519 -out my-plugin.key
+    PUBKEY=$(openssl pkey -in my-plugin.key -pubout -outform DER | tail -c 32 | xxd -p -c 64)
+    echo "Public key: $PUBKEY"
+    ```
+  </Step>
+  
+  <Step title="Add Key to Trusted Set">
+    ```json
+    {
+      "tool": "plugin_trust",
+      "args": {
+        "action": "add",
+        "key_id": "my-plugins",
+        "pubkey_hex": "<PUBKEY from step 1>",
+        "label": "My Plugin Signing Key",
+        "allowed_kinds": ["tool"]
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Create Plugin Manifest">
+    ```json
+    {
+      "schema_version": 1,
+      "package_id": "my-tool",
+      "version": "1.0.0",
+      "kind": "tool",
+      "signer_pubkey_hex": "<PUBKEY from step 1>",
+      "files": [...],
+      "tool": {...}
+    }
+    ```
+  </Step>
+  
+  <Step title="Package and Sign">
+    ```bash
+    cargo run -q -p curd-core --bin curd-plugin-pack -- \
+      --manifest manifest.json \
+      --payload-root payload/ \
+      --out my-tool.curdt \
+      --private-key-file my-plugin.key
+    ```
+  </Step>
+  
+  <Step title="Install Plugin">
+    ```json
+    {
+      "tool": "plugin_tool",
+      "args": {
+        "action": "add",
+        "archive_path": "/path/to/my-tool.curdt"
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Verify Installation">
+    ```json
+    {
+      "tool": "plugin_tool",
+      "args": {
+        "action": "list"
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Plugin System" icon="puzzle-piece" href="/extensions/plugin-system">
+    Learn about the overall plugin architecture
+  </Card>
+  <Card title="Language Plugins" icon="code" href="/extensions/language-plugins">
+    Create language support with `.curdl` packages
+  </Card>
+  <Card title="Tool Plugins" icon="wrench" href="/extensions/tool-plugins">
+    Create custom tools with `.curdt` packages
+  </Card>
+  <Card title="Policy Configuration" icon="gears" href="/configuration/policy">
+    Configure plugin policies and restrictions
+  </Card>
+</CardGroup>

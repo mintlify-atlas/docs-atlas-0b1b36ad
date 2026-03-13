@@ -1,0 +1,473 @@
+---
+title: "Language Plugins"
+description: "Extend CURD with custom language support through .curdl packages"
+---
+
+Language plugins (`.curdl` packages) extend CURD with support for additional programming languages. They provide Tree-sitter grammars, file extension mappings, and optional metadata for build systems, LSP adapters, and debuggers.
+
+## What Language Plugins Provide
+
+A `.curdl` package can include:
+
+<AccordionGroup>
+  <Accordion title="File Extension Mapping" icon="file-code">
+    Associates file extensions with the language identifier for automatic language detection
+  </Accordion>
+  
+  <Accordion title="Tree-sitter Grammar" icon="sitemap">
+    Native grammar library for structural parsing and symbol extraction
+  </Accordion>
+  
+  <Accordion title="Query Bundle" icon="magnifying-glass-chart">
+    Optional Tree-sitter query files (`.scm`) for symbol extraction patterns
+  </Accordion>
+  
+  <Accordion title="Build System Metadata" icon="hammer">
+    Optional build system identifier for workspace detection and `curd build` integration
+  </Accordion>
+  
+  <Accordion title="LSP Adapter" icon="tower-broadcast">
+    Optional Language Server Protocol adapter name for editor integration
+  </Accordion>
+  
+  <Accordion title="Debug Adapter" icon="bug">
+    Optional Debug Adapter Protocol (DAP) adapter name for debugging support
+  </Accordion>
+</AccordionGroup>
+
+## Package Structure
+
+A typical language plugin payload contains:
+
+```text
+payload/
+  lib/
+    tree-sitter-acme.dylib    # Native grammar library
+  queries/
+    acme.scm                  # Optional query file
+```
+
+### Manifest Template
+
+Here's the structure for a `.curdl` manifest:
+
+```json
+{
+  "manifest": {
+    "schema_version": 1,
+    "package_id": "acme-language-pack",
+    "version": "0.1.0",
+    "kind": "language",
+    "signer_pubkey_hex": "REPLACE_WITH_ED25519_PUBKEY_HEX",
+    "description": "ACME language support for CURD",
+    "files": [
+      {
+        "path": "lib/tree-sitter-acme.dylib",
+        "sha256": "REPLACE_WITH_SHA256",
+        "size": 45678,
+        "executable": false
+      },
+      {
+        "path": "queries/acme.scm",
+        "sha256": "REPLACE_WITH_SHA256",
+        "size": 2048,
+        "executable": false
+      }
+    ],
+    "tool": null,
+    "language": {
+      "language_id": "acme",
+      "extensions": ["acme", "acm"],
+      "grammar_library_path": "lib/tree-sitter-acme.dylib",
+      "grammar_symbol": "tree_sitter_acme",
+      "query_path": "queries/acme.scm",
+      "build_system": "acme-build",
+      "lsp_adapter": "acme-lsp",
+      "debug_adapter": "acme-dap"
+    }
+  },
+  "payload_files": [
+    {
+      "path": "lib/tree-sitter-acme.dylib",
+      "content_b64": "REPLACE_WITH_BASE64_PAYLOAD",
+      "executable": false
+    },
+    {
+      "path": "queries/acme.scm",
+      "content_b64": "REPLACE_WITH_BASE64_QUERY",
+      "executable": false
+    }
+  ],
+  "signature_hex": "REPLACE_WITH_SIGNATURE_OVER_MANIFEST_JSON"
+}
+```
+
+## Language Specification Fields
+
+<ParamField path="language_id" type="string" required>
+  Unique language identifier (alphanumeric, hyphens, underscores, dots)
+  
+  Example: `"acme"`, `"my-lang"`, `"lang.v2"`
+</ParamField>
+
+<ParamField path="extensions" type="array<string>" required>
+  File extensions associated with this language (without leading dots)
+  
+  Example: `["acme", "acm"]`
+</ParamField>
+
+<ParamField path="grammar_library_path" type="string" required>
+  Relative path to the Tree-sitter grammar shared library
+  
+  Example: `"lib/tree-sitter-acme.dylib"`
+  
+  Platform-specific extensions:
+  - macOS: `.dylib`
+  - Linux: `.so`
+  - Windows: `.dll`
+</ParamField>
+
+<ParamField path="grammar_symbol" type="string" required>
+  C function name exported by the grammar library
+  
+  Example: `"tree_sitter_acme"`
+  
+  By convention, this is `tree_sitter_<language>` matching the grammar name
+</ParamField>
+
+<ParamField path="query_path" type="string">
+  Optional relative path to Tree-sitter query file
+  
+  Example: `"queries/acme.scm"`
+</ParamField>
+
+<ParamField path="build_system" type="string">
+  Optional build system identifier for workspace detection
+  
+  Example: `"acme-build"`
+  
+  Must match either a built-in adapter or a `[build.adapters.<name>]` entry in `settings.toml`
+</ParamField>
+
+<ParamField path="lsp_adapter" type="string">
+  Optional Language Server Protocol adapter name
+  
+  Example: `"acme-lsp"`
+</ParamField>
+
+<ParamField path="debug_adapter" type="string">
+  Optional Debug Adapter Protocol adapter name
+  
+  Example: `"acme-dap"`
+</ParamField>
+
+## Installation Process
+
+When you install a `.curdl` package:
+
+<Steps>
+  <Step title="Verification">
+    CURD verifies the archive extension, manifest kind, payload hashes, and Ed25519 signature
+  </Step>
+  
+  <Step title="Extraction">
+    The payload is extracted to `.curd/plugins/lang/<package_id>/`
+    
+    Example:
+    ```
+    .curd/
+      plugins/
+        lang/
+          acme-language-pack/
+            lib/
+              tree-sitter-acme.dylib
+            queries/
+              acme.scm
+            manifest.json
+            installed.json
+    ```
+  </Step>
+  
+  <Step title="Registry Rebuild">
+    CURD rebuilds `.curd/plugins/lang/languages.toml` with the new language registration
+  </Step>
+  
+  <Step title="Grammar Registration">
+    The grammar becomes available for file extension matching and parsing
+  </Step>
+</Steps>
+
+## Build System Integration
+
+The `build_system` field enables automatic build adapter selection:
+
+<Info>
+  When a workspace contains files matching your language plugin's extensions, CURD considers the plugin's `build_system` during `curd build` adapter auto-detection.
+</Info>
+
+### Configuring Build Adapters
+
+For the build system to execute, define a matching adapter in `settings.toml`:
+
+```toml
+[build.adapters.acme-build]
+detect_files = ["acme.build", "ACME.yaml"]
+steps = [["acme-build", "compile"]]
+```
+
+Now when CURD finds `.acme` files and detects an `acme.build` file, it will:
+
+1. Match the file extensions to your language plugin
+2. Look up the `build_system = "acme-build"` metadata
+3. Find the `[build.adapters.acme-build]` configuration
+4. Use that adapter for `curd build` and workspace analysis
+
+## Creating a Language Plugin
+
+### 1. Create a Tree-sitter Grammar
+
+Start by creating a Tree-sitter grammar for your language:
+
+```bash
+# Initialize a new grammar
+npx tree-sitter init
+
+# Edit grammar.js to define your language rules
+# ...
+
+# Generate the parser
+npx tree-sitter generate
+
+# Test your grammar
+npx tree-sitter test
+```
+
+### 2. Build the Native Library
+
+Compile the grammar to a shared library:
+
+```bash
+# Example Makefile target
+gcc -shared -fPIC \
+  -Isrc \
+  src/parser.c \
+  -o lib/tree-sitter-acme.dylib
+```
+
+See the [plugin Makefile template](https://github.com/aerospeedsta/curd/blob/main/curd-core/src/bin/templates/plugin_makefile.mk) for a complete example.
+
+### 3. Create Query File (Optional)
+
+Define Tree-sitter queries for symbol extraction:
+
+```scheme
+; queries/acme.scm
+
+(function_definition
+  name: (identifier) @function.name) @function.def
+
+(class_definition
+  name: (identifier) @class.name) @class.def
+
+(method_definition
+  name: (identifier) @method.name) @method.def
+```
+
+### 4. Prepare the Manifest
+
+Create a manifest based on the template above, filling in:
+
+- Your package ID and version
+- Language metadata (ID, extensions, paths)
+- File hashes (compute with `sha256sum`)
+- Your Ed25519 public key
+
+### 5. Package and Sign
+
+Use `curd-plugin-pack` to create the signed archive:
+
+```bash
+cargo run -q -p curd-core --bin curd-plugin-pack -- \
+  --manifest manifest.json \
+  --payload-root payload/ \
+  --out acme-language-pack.curdl \
+  --private-key-file signing.key
+```
+
+### 6. Install the Plugin
+
+Add the plugin through CURD's MCP interface:
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "add",
+    "archive_path": "/path/to/acme-language-pack.curdl"
+  }
+}
+```
+
+## Managing Language Plugins
+
+### List Installed Languages
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "list"
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "installed_plugins": [
+    {
+      "package_id": "acme-language-pack",
+      "version": "0.1.0",
+      "language_id": "acme",
+      "extensions": ["acme", "acm"],
+      "install_dir": ".curd/plugins/lang/acme-language-pack"
+    }
+  ]
+}
+```
+
+### Remove a Language Plugin
+
+```json
+{
+  "tool": "plugin_language",
+  "args": {
+    "action": "remove",
+    "package_id": "acme-language-pack"
+  }
+}
+```
+
+<Warning>
+  Removing a language plugin will cause CURD to lose structural understanding of files with that language's extensions. Existing parsed data may become stale.
+</Warning>
+
+## Validation Rules
+
+CURD enforces strict validation on language plugins:
+
+<AccordionGroup>
+  <Accordion title="Identifier Constraints">
+    - `language_id` must use alphanumeric characters, hyphens, underscores, or dots
+    - No spaces or special characters allowed
+    - Cannot be empty
+  </Accordion>
+  
+  <Accordion title="Path Safety">
+    - All paths must be relative
+    - Cannot contain `..` or absolute components
+    - Cannot escape the plugin directory
+  </Accordion>
+  
+  <Accordion title="Grammar Validation">
+    - Grammar library must exist at specified path
+    - Must export the specified grammar symbol
+    - Library is validated before first use
+  </Accordion>
+  
+  <Accordion title="Build System Names">
+    - Must use valid identifier characters
+    - Should correspond to an adapter definition in `settings.toml`
+  </Accordion>
+</AccordionGroup>
+
+## Runtime Behavior
+
+Language plugins are loaded on-demand:
+
+1. When CURD encounters a file with a matching extension
+2. The grammar is loaded from the plugin's library path
+3. The plugin client validates the library and symbol
+4. The grammar is cached for subsequent parsing operations
+5. Query files are loaded if specified in the manifest
+
+See [plugin_client.rs:plugin_packages.rs](https://github.com/aerospeedsta/curd/blob/main/curd-core/src/plugin_client.rs) for implementation details.
+
+## Example: CURD Language Plugin
+
+The repository includes a reference implementation:
+
+```bash
+cd examples/curd-language-extension
+make
+```
+
+This example demonstrates:
+
+- Tree-sitter grammar compilation
+- Query file creation
+- Manifest configuration
+- Packaging workflow
+
+See the [CURD language extension README](https://github.com/aerospeedsta/curd/blob/main/examples/curd-language-extension/README.md) for details.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Grammar fails to load">
+    **Symptoms**: `Plugin load failed` error during installation
+    
+    **Causes**:
+    - Grammar symbol name mismatch
+    - Platform-specific library not found
+    - Missing dependencies in shared library
+    
+    **Solutions**:
+    - Verify `grammar_symbol` matches the exported C function
+    - Build for correct platform (`.dylib` on macOS, `.so` on Linux)
+    - Check `ldd` / `otool -L` output for missing dependencies
+  </Accordion>
+  
+  <Accordion title="File extensions not recognized">
+    **Symptoms**: Files not parsed, search doesn't find symbols
+    
+    **Causes**:
+    - Plugin not installed
+    - Registry not rebuilt
+    - Extension conflict with another language
+    
+    **Solutions**:
+    - List installed plugins to confirm installation
+    - Check `.curd/plugins/lang/languages.toml`
+    - Ensure no other language claims the same extensions
+  </Accordion>
+  
+  <Accordion title="Build system not detected">
+    **Symptoms**: `curd build` doesn't use the language's build system
+    
+    **Causes**:
+    - Build adapter not defined in `settings.toml`
+    - Build system name mismatch
+    - Detection files not present
+    
+    **Solutions**:
+    - Add `[build.adapters.<name>]` section to `settings.toml`
+    - Verify `build_system` field matches adapter name
+    - Ensure workspace contains detection files
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tool Plugins" icon="wrench" href="/extensions/tool-plugins">
+    Create custom tool plugins with `.curdt` packages
+  </Card>
+  <Card title="Trust Management" icon="key" href="/extensions/plugin-trust">
+    Manage signing keys and trust configuration
+  </Card>
+  <Card title="Tree-sitter Docs" icon="book" href="https://tree-sitter.github.io/tree-sitter/">
+    Learn more about Tree-sitter grammar development
+  </Card>
+</CardGroup>

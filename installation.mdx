@@ -1,0 +1,259 @@
+---
+title: Installation
+description: Install CURD via native OS packages, language wrappers, or containers
+---
+
+CURD is distributed via native OS packages, language-bound wrappers, and container images. Choose the method that best fits your workflow.
+
+## Native OS Package Managers
+
+Recommended for permanent system-wide installation.
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    ### Homebrew
+    
+    ```bash
+    brew tap aerospeedsta/curd
+    brew install curd
+    ```
+    
+    Verify the installation:
+    
+    ```bash
+    curd --version
+    ```
+    
+    Expected output:
+    ```
+    curd 0.7.1-beta
+    ```
+  </Tab>
+  
+  <Tab title="Windows">
+    ### Winget
+    
+    ```powershell
+    winget install curd
+    ```
+    
+    ### Scoop
+    
+    ```powershell
+    scoop bucket add curd https://github.com/aerospeedsta/curd-scoop.git
+    scoop install curd
+    ```
+    
+    Verify the installation:
+    
+    ```powershell
+    curd --version
+    ```
+  </Tab>
+  
+  <Tab title="Linux">
+    ### Arch Linux (AUR)
+    
+    ```bash
+    paru -S curd-bin
+    ```
+    
+    Or with `yay`:
+    
+    ```bash
+    yay -S curd-bin
+    ```
+    
+    ### Debian / Ubuntu
+    
+    Download the `.deb` package from [GitHub Releases](https://github.com/aerospeedsta/CURD/releases):
+    
+    ```bash
+    sudo dpkg -i curd_amd64.deb
+    ```
+    
+    ### Fedora / RHEL
+    
+    Download the `.rpm` package from [GitHub Releases](https://github.com/aerospeedsta/CURD/releases):
+    
+    ```bash
+    sudo rpm -i curd_x86_64.rpm
+    ```
+  </Tab>
+</Tabs>
+
+## Wrapper Launchers (Instant Run)
+
+Run CURD instantly without system-level installation using language wrappers.
+
+<CodeGroup>
+
+```bash Python (uvx)
+uvx --from curd-python curd --version
+```
+
+```bash Node.js (bunx)
+bunx --bun curd-node --version
+```
+
+</CodeGroup>
+
+<Info>
+Wrapper launchers are perfect for CI/CD environments or quick testing without permanent installation.
+</Info>
+
+## Language Bindings
+
+Install CURD as a library for programmatic access.
+
+<Tabs>
+  <Tab title="Python">
+    ```bash
+    pip install curd-python
+    ```
+    
+    Or with `uv`:
+    
+    ```bash
+    uv pip install curd-python
+    ```
+  </Tab>
+  
+  <Tab title="Node.js">
+    ```bash
+    npm install curd-node
+    ```
+    
+    Or with `bun`:
+    
+    ```bash
+    bun install curd-node
+    ```
+  </Tab>
+</Tabs>
+
+## Containerized MCP
+
+Run the CURD Model Context Protocol (MCP) server via Docker.
+
+```bash
+docker run -it --rm -v $(pwd):/workspace aerospeedsta/curd:latest
+```
+
+<Note>
+The container mounts your current directory as `/workspace` for file access.
+</Note>
+
+## Build from Source
+
+For development or custom builds, compile CURD from source.
+
+<Steps>
+  <Step title="Install Rust">
+    CURD requires Rust 2024 edition. Install via [rustup](https://rustup.rs/):
+    
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+  </Step>
+  
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/aerospeedsta/CURD.git
+    cd CURD
+    ```
+  </Step>
+  
+  <Step title="Build the release binary">
+    ```bash
+    cargo build --release
+    ```
+    
+    The binary will be in `target/release/curd`.
+  </Step>
+  
+  <Step title="Install locally">
+    ```bash
+    cargo install --path curd
+    ```
+    
+    Or copy the binary manually:
+    
+    ```bash
+    cp target/release/curd ~/.local/bin/
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+Building from source requires Tree-sitter and other dependencies. The build may take several minutes.
+</Warning>
+
+## Installation Methods Comparison
+
+| Method | Best For | Pros | Cons |
+|--------|----------|------|------|
+| **Homebrew/Winget** | Permanent installation | Auto-updates, system integration | Requires admin/elevated privileges |
+| **Wrapper Launchers** | Quick testing, CI/CD | No installation needed | Slight startup overhead |
+| **Language Bindings** | Programmatic use | Library API access | Requires language runtime |
+| **Docker** | MCP server, isolation | Containerized, reproducible | Requires Docker daemon |
+| **Build from Source** | Development, customization | Latest features, control | Build time, manual updates |
+
+## Verify Installation
+
+After installation, verify CURD is working:
+
+```bash
+curd --version
+```
+
+Expected output:
+```
+curd 0.7.1-beta
+```
+
+Check available commands:
+
+```bash
+curd --help
+```
+
+## Shell Completions
+
+CURD provides shell completions for better CLI experience.
+
+<Tabs>
+  <Tab title="Bash">
+    ```bash
+    # Add to ~/.bashrc
+    eval "$(curd completions bash)"
+    ```
+  </Tab>
+  
+  <Tab title="Zsh">
+    ```bash
+    # Add to ~/.zshrc
+    eval "$(curd completions zsh)"
+    ```
+  </Tab>
+  
+  <Tab title="Fish">
+    ```bash
+    # Add to ~/.config/fish/config.fish
+    curd completions fish | source
+    ```
+  </Tab>
+  
+  <Tab title="PowerShell">
+    ```powershell
+    # Add to your PowerShell profile
+    curd completions powershell | Out-String | Invoke-Expression
+    ```
+  </Tab>
+</Tabs>
+
+## Next Steps
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Initialize your first CURD workspace and try the core workflows
+</Card>

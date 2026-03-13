@@ -1,0 +1,261 @@
+---
+title: 'search'
+description: 'Semantic code search with BM25 ranking and Tree-sitter parsing'
+---
+
+## Description
+
+The `search` tool performs semantic symbol search across the workspace using BM25 ranking and Tree-sitter parsing. It automatically builds and maintains a symbol index in SQLite.
+
+## Request Parameters
+
+<ParamField path="query" type="string" required>
+  Search query string. Can include context prefixes like `@alias::query` for external context searching.
+</ParamField>
+
+<ParamField path="kind" type="string">
+  Filter results by symbol kind. Valid values:
+  - `function` - Function definitions
+  - `class` - Class declarations
+  - `struct` - Struct types
+  - `interface` - Interfaces/traits
+  - `module` - Module declarations
+  - `method` - Class/struct methods
+  - `unknown` - Unclassified symbols
+</ParamField>
+
+<ParamField path="profile" type="string">
+  Execution profile name (e.g., `default`, `ci_strict`). Overrides the active profile for capability checks.
+</ParamField>
+
+## Response Fields
+
+<ResponseField name="status" type="string" required>
+  Always `"ok"` on success.
+</ResponseField>
+
+<ResponseField name="results" type="array" required>
+  Array of matched symbols sorted by BM25 relevance score.
+  
+  <Expandable title="Symbol Object Schema">
+    <ResponseField name="id" type="string">
+      Unique symbol identifier (format: `file::symbol` or `file::symbol::#N` for overloads)
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Symbol name (e.g., `calculate_score`, `User`)
+    </ResponseField>
+    
+    <ResponseField name="kind" type="string">
+      Symbol type: `function`, `class`, `struct`, `interface`, `module`, `method`, `unknown`
+    </ResponseField>
+    
+    <ResponseField name="role" type="string">
+      Symbol role: `definition`, `stub`, `reference`
+    </ResponseField>
+    
+    <ResponseField name="filepath" type="string">
+      Relative path from workspace root
+    </ResponseField>
+    
+    <ResponseField name="start_line" type="number">
+      Starting line number (1-indexed)
+    </ResponseField>
+    
+    <ResponseField name="end_line" type="number">
+      Ending line number (inclusive)
+    </ResponseField>
+    
+    <ResponseField name="start_byte" type="number">
+      Starting byte offset in file
+    </ResponseField>
+    
+    <ResponseField name="end_byte" type="number">
+      Ending byte offset in file
+    </ResponseField>
+    
+    <ResponseField name="signature" type="string | null">
+      Function signature (if available)
+    </ResponseField>
+    
+    <ResponseField name="semantic_hash" type="string | null">
+      SHA-256 hash of symbol AST for change detection
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Number of results returned
+</ResponseField>
+
+<ResponseField name="index_stats" type="object">
+  Statistics from the most recent index build.
+  
+  <Expandable title="Index Stats Schema">
+    <ResponseField name="index_mode" type="string">
+      Index mode used: `full`, `fast`, `lazy`, `scoped`
+    </ResponseField>
+    
+    <ResponseField name="total_files" type="number">
+      Total source files scanned
+    </ResponseField>
+    
+    <ResponseField name="cache_hits" type="number">
+      Files served from cache (unchanged since last index)
+    </ResponseField>
+    
+    <ResponseField name="cache_misses" type="number">
+      Files parsed in this run
+    </ResponseField>
+    
+    <ResponseField name="total_ms" type="number">
+      Total indexing time in milliseconds
+    </ResponseField>
+    
+    <ResponseField name="parse_ms" type="number">
+      Time spent parsing files
+    </ResponseField>
+    
+    <ResponseField name="unsupported_lang" type="number">
+      Files skipped due to unsupported language
+    </ResponseField>
+    
+    <ResponseField name="parse_fail" type="number">
+      Files that failed to parse
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```json Basic Search
+{
+  "query": "calculate_score",
+  "kind": "function"
+}
+```
+
+```json Context-Prefixed Search
+{
+  "query": "@rust-analyzer::InlayHints"
+}
+```
+
+</CodeGroup>
+
+### Response Example
+
+```json
+{
+  "status": "ok",
+  "results": [
+    {
+      "id": "src/scoring.rs::calculate_score",
+      "name": "calculate_score",
+      "kind": "function",
+      "role": "definition",
+      "filepath": "src/scoring.rs",
+      "start_line": 42,
+      "end_line": 58,
+      "start_byte": 1024,
+      "end_byte": 1456,
+      "signature": "pub fn calculate_score(input: &str) -> f64",
+      "semantic_hash": "a3f5e8c..."
+    }
+  ],
+  "count": 1,
+  "index_stats": {
+    "index_mode": "fast",
+    "total_files": 245,
+    "cache_hits": 230,
+    "cache_misses": 15,
+    "total_ms": 450,
+    "parse_ms": 380
+  }
+}
+```
+
+## Index Configuration
+
+Configure indexing behavior in `settings.toml`:
+
+```toml
+[index]
+mode = "fast"              # full | fast | lazy | scoped
+parser_backend = "wasm"    # wasm | native
+execution = "multiprocess" # singlethreaded | multiprocess
+chunk_size = 4096
+max_file_size = 524288     # 512 KB
+large_file_policy = "skip" # skip | skeleton | full
+scope = ["src/", "tests/"] # Only used in 'scoped' mode
+```
+
+### Index Modes
+
+- **`full`**: Index entire workspace on every search
+- **`fast`**: Use query hint to pre-filter files (recommended)
+- **`lazy`**: Query cache only, never build new indices
+- **`scoped`**: Index only paths matching `scope` patterns
+
+## External Context Search
+
+Search symbols from linked external repositories:
+
+```json
+{
+  "query": "@rust-analyzer::InlayHints"
+}
+```
+
+External contexts are registered via the `context` tool:
+
+```json
+{
+  "tool": "context",
+  "action": "add",
+  "path": "/path/to/rust-analyzer",
+  "alias": "@rust-analyzer",
+  "index": true
+}
+```
+
+## Performance Considerations
+
+<Tip>
+  - **First search is slow**: Initial index build for large codebases (100k+ LOC) can take 10-60 seconds
+  - **Subsequent searches are fast**: SQLite cache provides &lt;100ms response times
+  - **Cache invalidation**: Mutations automatically invalidate affected files
+  - **Multiprocess indexing**: Default execution model spawns worker processes for parallelism
+</Tip>
+
+## Error Handling
+
+```json Error: No results
+{
+  "status": "ok",
+  "results": [],
+  "count": 0
+}
+```
+
+```json Error: Index failure
+{
+  "error": "Failed to index symbols: unsupported file format",
+  "details": {
+    "parse_fail_samples": ["python: src/test.py: ParseError"]
+  }
+}
+```
+
+## Related Tools
+
+<CardGroup cols={2}>
+  <Card title="graph" icon="diagram-project" href="/api/tools/graph">
+    Explore dependencies of search results
+  </Card>
+  <Card title="read" icon="book-open" href="/api/tools/read">
+    Read full source code for symbols
+  </Card>
+</CardGroup>

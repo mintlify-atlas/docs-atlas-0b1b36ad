@@ -1,0 +1,432 @@
+---
+title: Multi-Workspace Management
+description: Coordinate multiple CURD workspaces and handle concurrent sessions
+---
+
+## Overview
+
+CURD supports managing multiple workspaces simultaneously, enabling complex workflows across projects, monorepos, and collaborative environments. This guide covers workspace isolation, session locking, and cross-workspace coordination.
+
+## Workspace Isolation
+
+Each CURD workspace maintains independent state:
+
+- **`.curd/` directory**: Transaction history, shadow workspace, indexes
+- **`settings.toml`**: Configuration and policies
+- **`contexts.json`**: Linked external repositories
+- **Session lock**: Prevents concurrent modifications
+
+<Info>
+  Workspaces are identified by their root directory. Multiple CURD processes can operate on **different** workspaces simultaneously.
+</Info>
+
+## Session Locking
+
+CURD uses a file-based lock to prevent concurrent transactions:
+
+```
+.curd/SESSION_LOCK
+```
+
+This file contains the process ID (PID) of the active CURD session.
+
+### Lock Behavior
+
+#### Single Workspace, Multiple Processes
+
+<CodeGroup>
+
+```bash Terminal 1
+cd /workspace/project-a
+curd workspace begin
+# Lock acquired by PID 12345
+```
+
+```bash Terminal 2
+cd /workspace/project-a
+curd workspace begin
+# Error: Workspace is locked by another active transaction.
+# Starting in READ-ONLY mode.
+```
+
+</CodeGroup>
+
+#### Multiple Workspaces, Multiple Processes
+
+<CodeGroup>
+
+```bash Terminal 1
+cd /workspace/project-a
+curd workspace begin
+# Lock acquired for project-a
+```
+
+```bash Terminal 2
+cd /workspace/project-b
+curd workspace begin
+# Lock acquired for project-b (different workspace)
+```
+
+</CodeGroup>
+
+### Read-Only Mode
+
+When a workspace is locked, subsequent processes enter read-only mode:
+
+**Available operations:**
+- `search`, `read`, `graph`, `find`
+- `workspace status`, `workspace list`
+- `lsp`, `doc`, `doctor`
+
+**Blocked operations:**
+- `edit`, `mutate`, `manage_file`
+- `workspace begin`, `workspace commit`
+- `shell` (risky commands)
+
+<Warning>
+  Attempting a write operation in read-only mode returns:
+  
+  ```json
+  {
+    "error": "Cannot execute tool 'edit': Workspace is locked in READ-ONLY mode by another active transaction."
+  }
+  ```
+</Warning>
+
+### Stale Lock Detection
+
+If a CURD process crashes without releasing the lock, CURD automatically detects stale locks:
+
+```bash
+# Terminal 1: Force-kill CURD
+kill -9 12345
+
+# Terminal 2: New session detects stale lock
+curd workspace begin
+# INFO: Stale lock detected for PID 12345. Ignoring.
+# Lock acquired by PID 67890
+```
+
+Implementation (Linux/macOS only): `/home/daytona/workspace/source/curd-core/src/workspace.rs:230`
+
+```rust
+let exists = std::process::Command::new("kill")
+    .arg("-0")
+    .arg(pid.to_string())
+    .status()
+    .map(|s| s.success())
+    .unwrap_or(true);
+
+if !exists {
+    log::info!("Stale lock detected for PID {}. Ignoring.", pid);
+    let _ = std::fs::remove_file(&lock_path);
+    return false;
+}
+```
+
+## CURD State Directory
+
+By default, CURD stores state in `.curd/` at the workspace root. Override with:
+
+```bash
+export CURD_STATE_DIR=/custom/path/.curd
+curd workspace begin
+```
+
+**Use cases:**
+- Network-mounted storage for shared state
+- Separate state per developer in shared workspaces
+- Ramdisk for performance (`/dev/shm/.curd`)
+
+<Tip>
+  Shadow workspaces can consume significant disk space. Use `CURD_STATE_DIR` to place state on a separate volume.
+</Tip>
+
+## Shadow Workspace Detection
+
+CURD automatically detects when operating inside a shadow workspace:
+
+```rust
+let root_str = workspace_root.to_string_lossy();
+if let Some(idx) = root_str.find(".curd/shadow/") {
+    let real_root = PathBuf::from(&root_str[..idx]);
+    return real_root.join(".curd");
+}
+```
+
+This prevents nested transactions and ensures state is always stored in the real workspace root.
+
+## Multi-Workspace Workflows
+
+### Monorepo with Microservices
+
+Initialize CURD in each service directory:
+
+```bash
+cd /monorepo
+curd init  # Root workspace
+
+cd services/auth
+curd init  # Auth service workspace
+
+cd ../payment
+curd init  # Payment service workspace
+```
+
+Link services to the root:
+
+```bash
+cd /monorepo
+curd context add services/auth --alias @auth
+curd context add services/payment --alias @payment
+```
+
+Now the root workspace can analyze cross-service dependencies:
+
+```bash
+curd graph --from @auth::login --to @payment::charge
+```
+
+### Parallel Development Teams
+
+Use separate state directories per developer:
+
+<CodeGroup>
+
+```bash Developer A
+export CURD_STATE_DIR=/workspace/.curd-alice
+curd workspace begin
+# Work on feature-a
+curd workspace commit
+```
+
+```bash Developer B
+export CURD_STATE_DIR=/workspace/.curd-bob
+curd workspace begin
+# Work on feature-b
+curd workspace commit
+```
+
+</CodeGroup>
+
+Merge changes using Git:
+
+```bash
+git merge feature-a feature-b
+curd doctor  # Verify semantic integrity
+```
+
+### CI/CD Pipeline
+
+Each CI job operates in an isolated workspace:
+
+```yaml
+# .github/workflows/ci.yml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run CURD tests
+        run: |
+          curd init
+          curd test --strict
+          curd doctor --profile ci_strict
+```
+
+No lock contention because each job uses a fresh workspace clone.
+
+### Multi-Workspace REPL
+
+Switch between workspaces in the REPL:
+
+```bash
+curd repl
+```
+
+```
+curd> workspace(action: "status")
+{"transaction_active": false, "workspace_root": "/project-a"}
+
+curd> :cd /project-b
+Switched to workspace: /project-b
+
+curd> workspace(action: "status")
+{"transaction_active": false, "workspace_root": "/project-b"}
+```
+
+<Info>
+  The `:cd` command is a REPL-specific feature. MCP clients must create separate `EngineContext` instances for each workspace.
+</Info>
+
+## Transaction Coordination
+
+### Nested Transactions (Not Supported)
+
+CURD does **not** support nested transactions:
+
+```bash
+curd workspace begin
+# Inside shadow workspace at .curd/shadow/root_abc123
+
+curd workspace begin
+# Error: Already inside an active transaction
+```
+
+### Savepoints (Supported)
+
+Use savepoints for incremental commits within a transaction:
+
+```bash
+curd workspace begin
+
+# Edit some files
+curd edit --uri src/auth.rs::login --body "new implementation"
+curd workspace commit  # Savepoint 1
+
+# Edit more files
+curd edit --uri src/db.rs::connect --body "updated connection"
+curd workspace commit  # Savepoint 2
+
+# Rollback to savepoint 1
+curd workspace rollback
+
+# Commit final state
+curd workspace commit
+```
+
+Implementation: `/home/daytona/workspace/source/curd-core/src/transaction.rs`
+
+### Cross-Workspace Coordination
+
+For workflows spanning multiple workspaces, use external orchestration:
+
+```python
+# orchestrate.py
+import subprocess
+import json
+
+def run_curd(workspace, commands):
+    for cmd in commands:
+        subprocess.run(
+            ["curd", "--root", workspace, "workspace", "begin"],
+            check=True
+        )
+        subprocess.run(
+            ["curd", "--root", workspace, "edit", "--uri", cmd["uri"], "--body", cmd["body"]],
+            check=True
+        )
+        subprocess.run(
+            ["curd", "--root", workspace, "workspace", "commit"],
+            check=True
+        )
+
+run_curd("/project-a", [{"uri": "src/main.rs::main", "body": "// updated"}])
+run_curd("/project-b", [{"uri": "src/lib.rs::init", "body": "// updated"}])
+```
+
+## State Directory Structure
+
+Typical `.curd/` layout:
+
+```
+.curd/
+├── SESSION_LOCK          # Current session PID
+├── contexts.json         # Linked external repositories
+├── history.jsonl         # Tool call audit log
+├── graph_index.json      # Dependency graph cache
+├── search_index.db       # Symbol search index
+├── alerts.json           # Architectural audit alerts
+├── watchdog_report.md    # Semantic integrity violations
+├── plans/                # Compiled .curd scripts
+│   ├── <uuid>.json
+│   └── ...
+├── shadow/               # Active transaction workspace
+│   └── root_<hash>/      # Cloned workspace for staging
+│       ├── src/
+│       └── ...
+└── tmp/                  # Temporary files
+```
+
+## Best Practices
+
+1. **One workspace per repository**: Don't initialize CURD in parent directories of Git repos
+2. **Use context linking**: Link related repositories instead of operating on multiple workspaces
+3. **Respect session locks**: Never manually delete `SESSION_LOCK` unless you're certain the process is dead
+4. **Clean up shadow workspaces**: Run `curd workspace rollback` if a transaction is abandoned
+5. **Separate state in CI**: Use ephemeral state directories to avoid lock contention
+
+## Troubleshooting
+
+### "Workspace is locked" but no other CURD process is running
+
+**Problem**: Stale lock from a crashed process.
+
+**Solution**:
+```bash
+rm .curd/SESSION_LOCK
+curd workspace begin
+```
+
+Or let CURD auto-detect and clean:
+
+```bash
+curd workspace begin  # Automatically removes stale locks
+```
+
+### Shadow workspace is consuming too much disk space
+
+**Problem**: Large workspaces duplicate files during `workspace begin`.
+
+**Solutions**:
+1. Use a ramdisk for `.curd/shadow/`:
+   ```bash
+   export CURD_STATE_DIR=/dev/shm/.curd
+   ```
+
+2. Rollback transactions regularly:
+   ```bash
+   curd workspace rollback
+   ```
+
+3. Use `.curdignore` to exclude large non-source files:
+   ```
+   # .curdignore
+   node_modules/
+   target/
+   *.mp4
+   *.zip
+   ```
+
+### Cross-workspace graph queries are slow
+
+**Problem**: Linked contexts are re-indexed on every query.
+
+**Solution**: Pre-build indexes for linked contexts:
+
+```bash
+cd /external/repo
+curd search --rebuild-index
+```
+
+CURD caches the index in `.curd/search_index.db` and reuses it across workspaces.
+
+## Implementation Reference
+
+Key files:
+- **`curd-core/src/workspace.rs`**: Workspace engine and locking logic (lines 1-526)
+- **`curd-core/src/transaction.rs`**: Shadow store and commit/rollback
+- **`curd-core/src/context_link.rs`**: Context registry and mode handling
+- **`curd/src/main.rs`**: CLI workspace command routing (lines 1140-1235)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Context Linking" icon="link" href="/advanced/context-linking">
+    Link external repositories to extend analysis scope
+  </Card>
+  <Card title="Transaction Model" icon="code-branch" href="/concepts/shadow-workspace">
+    Deep dive into shadow workspaces and atomic commits
+  </Card>
+</CardGroup>

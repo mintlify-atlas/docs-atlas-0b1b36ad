@@ -1,0 +1,487 @@
+---
+title: 'Build Adapters'
+description: 'Build system integration for cargo, npm, make, cmake, and custom adapters'
+icon: 'hammer'
+---
+
+## Overview
+
+CURD includes **built-in adapters** for popular build systems and supports **custom adapters** via `settings.toml`. Build adapters translate high-level build requests (profile, target) into executable commands.
+
+<Info>
+Build adapters enable CURD to detect project type automatically and execute builds without manual command specification.
+</Info>
+
+## Build Configuration
+
+```toml settings.toml
+[build]
+preferred_adapter = "cargo"     # Override auto-detection
+default_profile = "debug"       # debug | release
+default_target = "all"          # Target to build if unspecified
+build_dir = "build"             # Build artifact directory
+
+# Task aliases
+[build.tasks]
+test = "cargo test --all-features"
+lint = "cargo clippy -- -D warnings"
+bench = "cargo bench --no-fail-fast"
+```
+
+Source: `curd-core/src/config.rs:957-971`
+
+## Built-in Adapters
+
+CURD auto-detects build systems based on marker files:
+
+| Adapter | Detection Files | Default Command | Profiles |
+|---------|----------------|-----------------|----------|
+| `cargo` | `Cargo.toml` | `cargo build` | `debug`, `release` |
+| `cmake` | `CMakeLists.txt` | `cmake --build build` | `Debug`, `Release` |
+| `ninja` | `build.ninja` | `ninja` | N/A |
+| `make` | `Makefile` | `make` | `debug`, `release` |
+| `npm` | `package.json` | `npm run build` | N/A |
+| `yarn` | `package.json` + `yarn.lock` | `yarn run build` | N/A |
+| `pnpm` | `package.json` + `pnpm-lock.yaml` | `pnpm run build` | N/A |
+| `bun` | `package.json` + `bun.lockb` | `bun run build` | N/A |
+| `go` | `go.mod` | `go build` | N/A |
+| `gradle` | `build.gradle`, `gradlew` | `./gradlew build` | N/A |
+| `maven` | `pom.xml` | `./mvnw compile` | N/A |
+| `bazel` | `WORKSPACE`, `BUILD` | `bazel build //...` | `opt`, `dbg` |
+| `meson` | `meson.build` | `meson compile -C build` | N/A |
+| `buck2` | `.buckconfig` | `buck2 build //...` | N/A |
+| `uv` | `pyproject.toml`, `uv.lock` | `uv build` | N/A |
+| `poetry` | `poetry.lock` | `poetry build` | N/A |
+| `pip` | `requirements.txt` | `python -m pip wheel .` | N/A |
+| `conda` | `environment.yml` | `conda run python -m build` | N/A |
+| `pixi` | `pixi.toml` | `pixi run build` | N/A |
+| `mise` | `mise.toml` | `mise run build` | N/A |
+
+Source: `curd-core/src/build.rs:239-345`, `curd-core/src/build.rs:461-837`
+
+<Tip>
+**Auto-detection priority:** CURD checks for custom adapters first, then built-in adapters in the order listed.
+</Tip>
+
+## Adapter Examples
+
+### Rust (Cargo)
+
+```toml settings.toml
+[build]
+preferred_adapter = "cargo"
+default_profile = "release"
+
+[build.tasks]
+test = "cargo test --workspace"
+lint = "cargo clippy --all-targets -- -D warnings"
+fmt = "cargo fmt --check"
+```
+
+**Generated commands:**
+
+```bash
+# Debug build
+cargo build
+
+# Release build
+cargo build --release
+
+# With target
+cargo build --target wasm32-unknown-unknown
+```
+
+Source: `curd-core/src/build.rs:462-484`
+
+### Node.js (npm/yarn/pnpm)
+
+```toml settings.toml
+[build]
+preferred_adapter = "pnpm"
+
+[build.tasks]
+dev = "pnpm dev"
+test = "pnpm test"
+lint = "pnpm lint"
+```
+
+**Generated commands:**
+
+```bash
+pnpm run build
+```
+
+Source: `curd-core/src/build.rs:747-756`
+
+### Python (uv/poetry/pip)
+
+```toml settings.toml
+[build]
+preferred_adapter = "uv"
+
+[build.tasks]
+test = "uv run pytest"
+lint = "uv run ruff check"
+```
+
+**Generated commands:**
+
+```bash
+# uv
+uv build
+
+# poetry
+poetry build
+
+# pip
+python -m pip wheel .
+```
+
+Source: `curd-core/src/build.rs:565-610`
+
+### C/C++ (CMake)
+
+```toml settings.toml
+[build]
+preferred_adapter = "cmake"
+default_profile = "Release"
+build_dir = "build"
+
+[build.tasks]
+test = "cd build && ctest"
+install = "cmake --install build"
+```
+
+**Generated commands:**
+
+```bash
+# Configure (first run)
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build --config Release
+```
+
+Source: `curd-core/src/build.rs:485-526`
+
+### Go
+
+```toml settings.toml
+[build]
+preferred_adapter = "go"
+
+[build.tasks]
+test = "go test ./..."
+lint = "golangci-lint run"
+```
+
+**Generated commands:**
+
+```bash
+go build
+```
+
+Source: `curd-core/src/build.rs:632-642`
+
+## Custom Adapters
+
+Define custom build adapters for non-standard projects:
+
+```toml settings.toml
+[build.adapters.acme]
+detect_files = ["acme.build", "acme.toml"]
+cwd = "build"  # Workspace-relative working directory
+steps = [
+  ["acme-compiler", "--mode", "{profile}", "--out", "dist"],
+  ["acme-linker", "{target}"]
+]
+```
+
+### Custom Adapter Schema
+
+<ParamField path="detect_files" type="array" default="[]">
+  List of marker files used for auto-detection. If all files exist, this adapter is selected.
+  
+  **Example:** `["BUILD.bazel", "WORKSPACE"]`
+</ParamField>
+
+<ParamField path="cwd" type="string" default=".">
+  Working directory for command execution (must be workspace-relative for security)
+</ParamField>
+
+<ParamField path="steps" type="array" default="[]">
+  List of command arrays. Each step is executed sequentially.
+  
+  **Template substitution:**
+  - `{profile}`: Replaced with build profile (`debug` or `release`)
+  - `{target}`: Replaced with target name (or empty if unspecified)
+  
+  **Example:**
+  ```toml
+  steps = [
+    ["compiler", "--profile={profile}"],
+    ["linker", "--target={target}"]
+  ]
+  ```
+</ParamField>
+
+Source: `curd-core/src/config.rs:973-981`, `curd-core/src/build.rs:790-836`
+
+<Warning>
+**Security:** Custom adapter paths must be workspace-relative. Paths containing `..`, `/`, or `~` will fail validation.
+
+See `curd-core/src/config.rs:697-717` for validation logic.
+</Warning>
+
+## Template Variables
+
+Custom adapter steps support variable substitution:
+
+```toml settings.toml
+[build.adapters.demo]
+steps = [
+  ["build-tool", "--profile={profile}", "--target={target}", "--out=dist"]
+]
+```
+
+**Invocation:**
+
+```bash
+curd build --profile release --target wasm32
+# Executes: build-tool --profile=release --target=wasm32 --out=dist
+```
+
+**Available variables:**
+- `{profile}`: `debug` or `release` (from `--profile` or config default)
+- `{target}`: Target name (from `--target` or config default)
+
+Source: `curd-core/src/build.rs:806-814`
+
+## Build Tasks
+
+Define task aliases for common workflows:
+
+```toml settings.toml
+[build.tasks]
+test = "cargo test --all-features"
+lint = "cargo clippy -- -D warnings"
+fmt = "cargo fmt"
+ci = "cargo test && cargo clippy && cargo fmt --check"
+```
+
+**Usage:**
+
+```bash
+curd build --target test
+# Executes: cargo test --all-features
+
+curd build --target lint
+# Executes: cargo clippy -- -D warnings
+```
+
+Tasks are **resolved before adapter selection**, so you can use them to override the adapter entirely:
+
+```toml
+[build.tasks]
+custom-build = "python scripts/build.py --release"
+```
+
+Source: `curd-core/src/build.rs:53-64`
+
+## Security
+
+### Untrusted Confirmation
+
+Custom adapters and raw commands require explicit confirmation:
+
+```bash
+curd build --adapter custom --execute
+# Error: untrusted_confirmation_required = true
+
+# Explicit trust:
+curd build --adapter custom --execute --allow-untrusted
+```
+
+<Warning>
+**Custom adapters** and **raw commands** can execute arbitrary code. CURD requires `--allow-untrusted` for safety.
+</Warning>
+
+Source: `curd-core/src/build.rs:66-74`, `curd-core/src/build.rs:103-131`
+
+### Raw Command Policy
+
+If `[policy.exec].allow_raw_command = false`, raw build commands are blocked:
+
+```toml settings.toml
+[policy.exec]
+allow_raw_command = false  # Block arbitrary commands
+```
+
+```bash
+curd build --command "rm -rf /" --execute
+# Error: Raw build commands are disabled by [policy.exec]
+```
+
+Source: `curd-core/src/build.rs:69-71`
+
+## Build Execution
+
+### Dry Run (Plan Only)
+
+```bash
+curd build
+# Returns build steps without executing
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "adapter": "cargo",
+  "profile": "debug",
+  "steps": [
+    {
+      "adapter": "cargo",
+      "cwd": "/workspace",
+      "command": ["cargo", "build"]
+    }
+  ],
+  "execute": false
+}
+```
+
+### Execute Build
+
+```bash
+curd build --execute
+```
+
+**Build logs** are written to `.curd/builds/latest.log`.
+
+Source: `curd-core/src/build.rs:147-222`
+
+### Zig Cross-Compilation
+
+For Rust projects, use Zig for cross-compilation:
+
+```bash
+curd build --zig --target aarch64-unknown-linux-gnu --execute
+# Executes: cargo zigbuild --target aarch64-unknown-linux-gnu
+```
+
+Source: `curd-core/src/build.rs:464-466`
+
+## Build Error Mapping
+
+CURD parses build errors and maps them to **semantic symbols** for fault propagation:
+
+**Supported formats:**
+
+- **Rust:** `--> src/main.rs:10:5`
+- **Node.js:** `at functionName (/path/file.js:10:15)`
+- **Python:** `File "/path/file.py", line 10, in`
+- **C/C++:** `src/main.cpp:10:5: error: ...`
+
+**Example:**
+
+```bash
+curd build --execute
+# Error: src/parser.rs:42:9: expected `;`
+# Mapped to symbol: curd::parser::parse_expr
+```
+
+CURD annotates the symbol in the graph for fault tracking.
+
+Source: `curd-core/src/build.rs:851-940`
+
+## Example: Multi-Language Monorepo
+
+```toml settings.toml
+[build]
+preferred_adapter = "make"  # Top-level orchestrator
+default_profile = "debug"
+
+[build.adapters.rust-component]
+detect_files = ["rust/Cargo.toml"]
+cwd = "rust"
+steps = [
+  ["cargo", "build", "--profile={profile}"]
+]
+
+[build.adapters.node-frontend]
+detect_files = ["frontend/package.json"]
+cwd = "frontend"
+steps = [
+  ["pnpm", "install"],
+  ["pnpm", "build"]
+]
+
+[build.adapters.python-backend]
+detect_files = ["backend/pyproject.toml"]
+cwd = "backend"
+steps = [
+  ["uv", "sync"],
+  ["uv", "build"]
+]
+
+[build.tasks]
+test-all = "make test-rust && make test-node && make test-python"
+lint-all = "make lint-rust && make lint-node && make lint-python"
+```
+
+## Validation
+
+Check build configuration:
+
+```bash
+curd doctor . --strict
+```
+
+**Common Errors:**
+
+- `config_build_adapter_empty_steps`: Adapter has no steps
+- `config_build_adapter_cwd_invalid`: Unsafe working directory
+- `config_build_adapter_detect_file_invalid`: Unsafe detect file path
+- `Unsafe path '...' in build configuration`: Path escapes workspace
+
+Source: `curd-core/src/config.rs:689-718`
+
+## CLI Reference
+
+```bash
+# Auto-detect and plan build
+curd build
+
+# Execute build
+curd build --execute
+
+# Override adapter
+curd build --adapter cmake --execute
+
+# Specify profile and target
+curd build --profile release --target server --execute
+
+# Use task alias
+curd build --target test --execute
+
+# Raw command (requires policy permission)
+curd build --command "python setup.py bdist_wheel" --execute --allow-untrusted
+
+# Zig cross-compilation (Rust)
+curd build --zig --target x86_64-pc-windows-gnu --execute
+```
+
+## See Also
+
+<CardGroup cols={3}>
+  <Card title="Settings" icon="sliders" href="/configuration/settings">
+    Core configuration options
+  </Card>
+  <Card title="Policy" icon="shield" href="/configuration/policy">
+    Execution security controls
+  </Card>
+  <Card title="Profiles" icon="user-group" href="/configuration/profiles">
+    Capability-based access control
+  </Card>
+</CardGroup>

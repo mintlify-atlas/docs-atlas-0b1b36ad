@@ -1,0 +1,442 @@
+---
+title: 'curd test'
+description: 'Run semantic integrity tests on the symbol graph'
+---
+
+## Overview
+
+The `test` command performs semantic integrity audits on your codebase, analyzing symbol coverage, dependency graph cohesion, architectural patterns, and policy enforcement. Unlike traditional testing, this validates the structural health of your code intelligence index.
+
+## Syntax
+
+```bash
+curd test [OPTIONS] [SCOPE]
+```
+
+**Alias:** `tst`
+
+## Parameters
+
+<ParamField path="scope" type="enum" default="all">
+  Scope of the test:
+  - `nodes` - Symbol coverage and indexing quality
+  - `edges` - Dependency graph connectivity
+  - `policy` - Policy engine validation
+  - `architecture` - Architectural patterns (cycles, etc.)
+  - `all` - Run all tests
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root
+</ParamField>
+
+<ParamField path="--verbose" type="boolean" default="false">
+  Show detailed breakdown of issues (dead zones, broken links, etc.)
+</ParamField>
+
+## Test Scopes
+
+### nodes
+
+Validates symbol indexing coverage and quality.
+
+**Metrics:**
+- Symbols indexed
+- Symbol density (symbols per KLoC)
+- Dead zones (files with 0 symbols)
+- Parse failures
+
+**Example:**
+```bash
+curd test nodes --verbose
+```
+
+**Output:**
+```
+[Node Coverage]
+  Symbols indexed: 3,847
+  Symbol Density:  42.3 symbols/KLoC
+  Dead Zones (0 symbols indexed):
+    • vendor/external/lib.c
+    • scripts/generated.py
+    ... and 8 more
+```
+
+---
+
+### edges
+
+Validates dependency graph connectivity and resolution.
+
+**Metrics:**
+- Cohesion ratio (resolved/total edges)
+- Broken links (unresolved references)
+- Stub resolution rate
+- Confidence distribution
+
+**Example:**
+```bash
+curd test edges --verbose
+```
+
+**Output:**
+```
+[Edge Connectivity]
+  Cohesion Ratio: 94% (Optimal)
+  Broken Links:   127
+  Top Unresolved Linkages:
+    • src/api.rs::external_call
+    • src/db.rs::query_impl
+    ... and 125 more
+  Resolution:     892/920 @stubs resolved
+
+[Confidence Intervals]
+  High (>=90%):   2,341
+  Medium (>=70%): 412
+  Low (<70%):     89
+```
+
+---
+
+### policy
+
+Validates policy engine enforcement.
+
+**Checks:**
+- Blocklist enforcement (e.g., `.curd/settings.toml` is protected)
+- Allowlist validation
+- Execution policy adherence
+
+**Example:**
+```bash
+curd test policy --verbose
+```
+
+**Output:**
+```
+[Policy Validation]
+  PASS: PolicyEngine correctly blocked illegal access.
+    Blocked: edit .curd/settings.toml
+    Reason:  Path matches blocked pattern '.curd/**'
+```
+
+---
+
+### architecture
+
+Detects architectural issues and anti-patterns.
+
+**Checks:**
+- Cyclical dependencies (tangled clusters)
+- Module coupling
+- Layering violations
+
+**Example:**
+```bash
+curd test architecture --verbose
+```
+
+**Output:**
+```
+[Architecture Audit]
+  Detected 2 Tangled Clusters (Cycles):
+    Cluster 1: 5 nodes
+      - src/api.rs::Router
+      - src/db.rs::Connection
+      - src/api.rs::Handler
+      - src/db.rs::Query
+      - src/api.rs::Middleware
+    Cluster 2: 3 nodes
+      - src/auth.rs::Session
+      - src/user.rs::User
+      - src/auth.rs::Token
+```
+
+---
+
+### all
+
+Runs all test scopes (nodes, edges, policy, architecture).
+
+**Example:**
+```bash
+curd test all
+```
+
+## Output Format
+
+The command produces a detailed report:
+
+```
+=== CURD Semantic Integrity Audit ===
+
+[Node Coverage]
+  Symbols indexed: 3,847
+  Symbol Density:  42.3 symbols/KLoC
+
+[Edge Connectivity]
+  Cohesion Ratio: 94% (Optimal)
+  Broken Links:   127
+  Resolution:     892/920 @stubs resolved
+
+[Confidence Intervals]
+  High (>=90%):   2,341
+  Medium (>=70%): 412
+  Low (<70%):     89
+
+[Architecture Audit]
+  No cyclical dependencies detected.
+
+[Policy Validation]
+  PASS: PolicyEngine correctly blocked illegal access.
+```
+
+## Common Usage Patterns
+
+### CI/CD Integration
+
+```bash
+# Full audit before deployment
+curd test all --verbose
+
+# Fail build on low coverage
+curd doctor --strict --min-coverage-ratio 0.8
+```
+
+### Pre-Commit Hook
+
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+curd test all || {
+  echo "Semantic integrity check failed"
+  exit 1
+}
+```
+
+### Development Workflow
+
+```bash
+# After refactoring
+curd session begin
+curd refactor rename src/api.rs::old_name new_name
+curd test all --verbose
+curd session commit
+```
+
+### Monitoring Index Quality
+
+```bash
+# Check symbol coverage
+curd test nodes
+
+# If low, rebuild with full mode
+curd config set index.mode full
+curd doctor
+curd test nodes
+```
+
+## Interpreting Results
+
+### Symbol Density
+
+| Density | Interpretation |
+|---------|----------------|
+| &lt;5 | Poor - Many files not indexed |
+| 5-20 | Low - Check for dead zones |
+| 20-50 | Good - Typical for most codebases |
+| >50 | Excellent - High granularity |
+
+```bash
+# Low density? Check verbose output
+curd test nodes --verbose
+```
+
+### Cohesion Ratio
+
+| Ratio | Interpretation |
+|-------|----------------|
+| &lt;70% | Poor - Many broken references |
+| 70-90% | Fair - Some external deps |
+| 90-95% | Good - Well-connected graph |
+| >95% | Optimal - Minimal broken links |
+
+```bash
+# Low cohesion? Check broken links
+curd test edges --verbose
+```
+
+### Cyclical Dependencies
+
+```bash
+# Detect cycles
+curd test architecture --verbose
+
+# Analyze specific cycle
+curd graph src/api.rs::Router --depth 3
+```
+
+## Fixing Common Issues
+
+### Dead Zones (No Symbols Indexed)
+
+**Cause:** Files not parsed or empty
+
+**Fix:**
+```bash
+# Check dead zones
+curd test nodes --verbose
+
+# Possible fixes:
+# 1. Increase max file size
+curd config set index.max_file_size 2097152
+
+# 2. Change large file policy
+curd config set index.large_file_policy full
+
+# 3. Rebuild index
+curd doctor
+```
+
+### Broken Links
+
+**Cause:** External dependencies or dynamic dispatch
+
+**Fix:**
+```bash
+# Check broken links
+curd test edges --verbose
+
+# Link external context
+curd context add ~/vendor/lib --alias vendorlib --read
+
+# Rebuild index
+curd doctor
+```
+
+### Cyclical Dependencies
+
+**Cause:** Mutual imports creating cycles
+
+**Fix:**
+```bash
+# Identify cycles
+curd test architecture --verbose
+
+# Analyze specific cycle
+curd graph src/problematic.rs::function --depth 3
+
+# Refactor to break cycle
+curd session begin
+curd refactor move src/a.rs::shared_type src/types.rs
+curd session commit
+
+# Verify fix
+curd test architecture
+```
+
+## Verbose Mode Details
+
+With `--verbose`, the test output includes:
+
+- **Nodes:** List of dead zones (up to 10)
+- **Edges:** Top unresolved linkages (up to 10)
+- **Architecture:** Full cycle node lists (up to 5 per cluster)
+- **Policy:** Detailed blocked access attempts
+
+```bash
+curd test all --verbose > audit_report.txt
+```
+
+## Integration with Other Commands
+
+### Test → Fix → Test Loop
+
+```bash
+# 1. Identify issues
+curd test all --verbose
+
+# 2. Fix low coverage
+curd config set index.mode full
+curd doctor
+
+# 3. Re-test
+curd test all
+```
+
+### Test After Refactoring
+
+```bash
+curd session begin
+
+# Make changes
+curd refactor rename src/lib.rs::OldName NewName
+
+# Test integrity
+curd test all --verbose
+
+# Commit if passing
+if curd test all; then
+  curd session commit
+else
+  curd session rollback
+fi
+```
+
+## Performance Notes
+
+- **nodes:** Fast (&lt;1s for most workspaces)
+- **edges:** Moderate (1-5s, depends on graph size)
+- **policy:** Instant
+- **architecture:** Slow (5-30s for large graphs with cycles)
+- **all:** Sum of all scopes
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="No index stats available">
+    Build the index first:
+    ```bash
+    curd doctor
+    curd test all
+    ```
+  </Accordion>
+
+  <Accordion title="Low symbol density">
+    Check index configuration:
+    ```bash
+    curd config show
+    
+    # Use full indexing mode
+    curd config set index.mode full
+    curd doctor
+    curd test nodes
+    ```
+  </Accordion>
+
+  <Accordion title="Many broken links">
+    Link external dependencies:
+    ```bash
+    curd context add ~/vendor/lib --alias vendorlib --read
+    curd doctor
+    curd test edges
+    ```
+  </Accordion>
+
+  <Accordion title="Test hangs on architecture">
+    Large graphs with many cycles can be slow:
+    ```bash
+    # Skip architecture test
+    curd test nodes
+    curd test edges
+    curd test policy
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd doctor](/commands/test) - Indexing diagnostics
+- [curd status](/commands/workspace) - Workspace state
+- [curd graph](/commands/graph) - Analyze dependencies
+- [curd config](/configuration/settings) - Configure indexing

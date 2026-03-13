@@ -1,0 +1,227 @@
+---
+title: 'curd graph'
+description: 'Explore caller/callee dependency graph of a symbol'
+---
+
+## Overview
+
+The `graph` command traverses the dependency graph of a symbol, revealing its callers (who calls it) and callees (what it calls). This is essential for understanding code relationships and impact analysis.
+
+## Syntax
+
+```bash
+curd graph [OPTIONS] <URI>
+```
+
+**Alias:** `g`
+
+## Parameters
+
+<ParamField path="uri" type="string" required>
+  The symbol URI to map (e.g., `src/main.rs::handle_request` or `src/main.rs`)
+</ParamField>
+
+<ParamField path="--depth" type="integer" default="1">
+  The traversal depth for exploring dependencies
+</ParamField>
+
+<ParamField path="--root" type="path" default=".">
+  Path to the workspace root directory
+</ParamField>
+
+## Behavior
+
+- Traverses both inbound (callers) and outbound (callees) edges
+- Returns graph structure with nodes and edges
+- Supports multi-level traversal with `--depth`
+- Respects linked contexts (external repositories)
+- Includes confidence scores for edge relationships
+
+## Examples
+
+<CodeGroup>
+
+```bash Basic Graph
+# Show immediate dependencies of a function
+curd graph src/api.rs::handle_request
+```
+
+```bash Deep Traversal
+# Explore 3 levels of dependencies
+curd graph src/core.rs::Engine --depth 3
+```
+
+```bash File-Level Graph
+# Show all symbols in a file and their connections
+curd graph src/parser.rs
+```
+
+```bash Class Dependencies
+# Map class relationships
+curd graph src/models.rs::User --depth 2
+```
+
+</CodeGroup>
+
+## Output Format
+
+Returns JSON with nodes and edges:
+
+```json
+{
+  "nodes": [
+    {
+      "uri": "src/api.rs::handle_request",
+      "kind": "function",
+      "name": "handle_request"
+    },
+    {
+      "uri": "src/db.rs::query",
+      "kind": "function",
+      "name": "query"
+    }
+  ],
+  "edges": [
+    {
+      "caller": "src/api.rs::handle_request",
+      "callee": "src/db.rs::query",
+      "confidence": 0.95,
+      "kind": "call"
+    }
+  ],
+  "root_uri": "src/api.rs::handle_request",
+  "depth": 1
+}
+```
+
+## Common Patterns
+
+### Impact Analysis
+
+Find all code affected by changing a function:
+
+```bash
+# Who calls this function?
+curd graph src/utils.rs::validate_input --depth 2
+```
+
+### Dependency Review
+
+Understand what external dependencies a module uses:
+
+```bash
+curd graph src/service.rs --depth 1
+```
+
+### Refactoring Planning
+
+Before moving or renaming a symbol:
+
+```bash
+# Check all callers and callees
+curd graph src/old_module.rs::legacy_function --depth 3
+```
+
+### Circular Dependency Detection
+
+Combine with test command:
+
+```bash
+# Find cycles in the graph
+curd test architecture --verbose
+curd graph src/problematic.rs::mutual_call
+```
+
+## Integration Examples
+
+### Graph → Read Pipeline
+
+```bash
+# Explore dependencies, then read specific ones
+curd graph src/main.rs::main --depth 2 | jq '.nodes[].uri'
+curd read src/config.rs::load_config
+```
+
+### Graph → Diagram
+
+```bash
+# Generate visual dependency diagram
+curd diagram --uris src/api.rs::Router --depth 2 --format svg > deps.svg
+```
+
+## Advanced Usage
+
+### Cross-Context Graphs
+
+When external contexts are linked:
+
+```bash
+# Add external repository
+curd context add ~/projects/lib --alias mylib --read
+
+# Graph can now traverse into linked context
+curd graph src/main.rs::use_external --depth 2
+```
+
+### Filtering by Confidence
+
+Edges include confidence scores (0.0-1.0):
+
+```json
+{
+  "edges": [
+    {
+      "caller": "src/a.rs::foo",
+      "callee": "src/b.rs::bar",
+      "confidence": 0.92
+    }
+  ]
+}
+```
+
+Low confidence (&lt;0.7) may indicate:
+- Dynamic dispatch
+- Reflection/metaprogramming
+- Incomplete parsing
+
+## Performance Notes
+
+- Depth 1-2: Fast (milliseconds)
+- Depth 3+: May take seconds on large graphs
+- Graph is cached; repeated queries are instant
+- Memory usage scales with depth × fan-out
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Symbol not found">
+    Verify the URI format:
+    ```bash
+    # Correct formats
+    curd graph src/main.rs::function_name
+    curd graph src/main.rs::Module::method
+    curd graph src/main.rs
+    ```
+  </Accordion>
+
+  <Accordion title="Empty graph">
+    The symbol may have no dependencies:
+    - Check if it's a leaf function (no callees)
+    - Verify it's actually called (no callers)
+    - Increase `--depth` to traverse further
+  </Accordion>
+
+  <Accordion title="Missing edges">
+    Some edges may not be captured:
+    - Dynamic dispatch is hard to track
+    - Ensure index quality: `curd test edges --verbose`
+    - Check for broken links in test output
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [curd search](/commands/search) - Find symbols to analyze
+- [curd read](/commands/read) - Read symbol source code
+- [curd diagram](/commands/graph) - Visualize graphs
+- [curd test](/commands/test) - Verify graph integrity

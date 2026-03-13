@@ -1,0 +1,419 @@
+---
+title: 'Settings Overview'
+description: 'Complete reference for settings.toml configuration'
+icon: 'sliders'
+---
+
+## Overview
+
+CURD uses `settings.toml` as its primary configuration file for controlling workspace behavior, build adapters, code intelligence, and policy enforcement. The configuration is loaded from one of these locations (in priority order):
+
+1. `.curd/curd.toml` or `.curd/settings.toml` (workspace-local)
+2. `settings.toml`, `curd.toml`, or `CURD.toml` (project root)
+3. Default configuration (if no file found)
+
+<Tip>
+CURD always falls back to safe defaults when configuration sections are omitted. You only need to specify the settings you want to customize.
+</Tip>
+
+## File Location
+
+The configuration file is discovered automatically:
+
+```bash
+workspace/
+├── .curd/
+│   └── settings.toml    # Highest priority
+└── settings.toml         # Fallback
+```
+
+Source: `curd-core/src/config.rs:503-527`
+
+## Core Sections
+
+The configuration is organized into logical sections:
+
+<CardGroup cols={2}>
+  <Card title="Runtime" icon="gauge" href="#runtime-configuration">
+    Runtime ceiling and execution mode
+  </Card>
+  <Card title="Profiles" icon="user-group" href="/configuration/profiles">
+    Role-based capability gating
+  </Card>
+  <Card title="Policy" icon="shield" href="/configuration/policy">
+    Security and access control
+  </Card>
+  <Card title="Build" icon="hammer" href="/configuration/build-adapters">
+    Build adapter configuration
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Edit" icon="pen-to-square" href="#edit-configuration">
+    Code surgery and churn limits
+  </Card>
+  <Card title="Index" icon="database" href="#index-configuration">
+    Symbol indexing and parsing
+  </Card>
+  <Card title="Storage" icon="hard-drive" href="#storage-configuration">
+    SQLite storage and encryption
+  </Card>
+  <Card title="Plugins" icon="plug" href="#plugins-configuration">
+    Plugin system and MCP tools
+  </Card>
+</CardGroup>
+
+## Runtime Configuration
+
+The runtime ceiling caps agent capabilities regardless of profile settings.
+
+```toml settings.toml
+[runtime]
+ceiling = "full"  # or "lite"
+```
+
+### Ceiling Modes
+
+<ParamField path="ceiling" type="string" default="full">
+  Runtime execution ceiling
+  
+  - **`full`**: All capabilities enabled (subject to profile gating)
+  - **`lite`**: Read-only mode - blocks Change, Exec, and Session operations
+</ParamField>
+
+<Warning>
+The `lite` ceiling is **strictly enforced** and overrides profile permissions. Use this for safe, read-only exploration of codebases.
+</Warning>
+
+Source: `curd-core/src/config.rs:62-66`, `curd-core/src/policy.rs:306-319`
+
+## Edit Configuration
+
+Controls surgical code editing and churn safety limits.
+
+```toml settings.toml
+[edit]
+churn_limit = 0.3           # Default for medium files (30%)
+churn_small_limit = 1.0     # Small files can be fully rewritten
+churn_large_limit = 0.15    # Large files: max 15% churn
+churn_massive_limit = 0.05  # Massive files: max 5% churn
+
+# File size thresholds (in AST nodes)
+small_file_nodes = 100
+large_file_nodes = 500
+massive_file_nodes = 2000
+
+enforce_transactional = true  # Require shadow workspace for edits
+```
+
+### Churn Protection
+
+CURD uses **churn ratio** (modified nodes / total nodes) to prevent large, risky rewrites:
+
+| File Size | Threshold | Max Churn | Example |
+|-----------|-----------|-----------|----------|
+| Small (< 100 nodes) | `churn_small_limit` | 100% | Complete refactor OK |
+| Medium (100-500) | `churn_limit` | 30% | ~150 nodes modified |
+| Large (500-2000) | `churn_large_limit` | 15% | ~300 nodes modified |
+| Massive (2000+) | `churn_massive_limit` | 5% | ~100 nodes modified |
+
+Source: `curd-core/src/config.rs:441-500`
+
+<Info>
+**Why churn limits?** Large-scale AST modifications are error-prone. CURD enforces incremental, surgical edits to maintain code quality.
+</Info>
+
+## Index Configuration
+
+Controls symbol indexing, parsing, and code intelligence.
+
+```toml settings.toml
+[index]
+mode = "full"                  # full | fast | lazy | scoped
+scope = ["src/**/*.rs"]        # Patterns for scoped mode
+max_file_size = 10485760       # 10 MB file size limit
+chunk_size = 4096              # Chunk size for large files
+large_file_policy = "skeleton" # skip | skeleton | full
+execution = "multithreaded"    # multithreaded | multiprocess | singlethreaded
+stall_threshold_ms = 5000      # Parser timeout
+parser_backend = "native"      # native | wasm
+
+[index.extension_language_map]
+ts = "typescript"
+mjs = "javascript"
+```
+
+### Index Modes
+
+<ParamField path="mode" type="string" default="full">
+  - **`full`**: Index entire workspace (best for accuracy)
+  - **`fast`**: Skip large files, focus on frequently changed code
+  - **`lazy`**: On-demand indexing (fastest startup)
+  - **`scoped`**: Only index paths matching `scope` patterns
+</ParamField>
+
+### Parser Configuration
+
+<ParamField path="parser_backend" type="string" default="native">
+  - **`native`**: Use compiled Tree-sitter grammars (fastest)
+  - **`wasm`**: Use WASM-based parsers (portable, slower)
+</ParamField>
+
+<ParamField path="large_file_policy" type="string" default="skeleton">
+  - **`skip`**: Ignore files over `max_file_size`
+  - **`skeleton`**: Extract top-level symbols only
+  - **`full`**: Parse entire file (may be slow)
+</ParamField>
+
+Source: `curd-core/src/config.rs:907-927`
+
+## Storage Configuration
+
+CURD uses SQLite for symbol storage, graph edges, and provenance tracking.
+
+```toml settings.toml
+[storage]
+enabled = true
+sqlite_path = ".curd/store.db"  # Workspace-relative only
+encryption_mode = "sqlcipher"   # Optional encryption
+key_env = "CURD_DB_KEY"         # Environment variable for key
+```
+
+<ParamField path="sqlite_path" type="string" default=".curd/store.db">
+  Path to SQLite database (must be workspace-relative for security)
+</ParamField>
+
+<ParamField path="encryption_mode" type="string" default="none">
+  Currently only `"sqlcipher"` is supported for encryption
+</ParamField>
+
+<Warning>
+**Security:** The `sqlite_path` must be workspace-relative. Absolute paths or `..` escapes will fail validation.
+</Warning>
+
+Source: `curd-core/src/config.rs:983-1016`
+
+## Plugins Configuration
+
+Controls the plugin system, language extensions, and MCP tool groups.
+
+```toml settings.toml
+[plugins]
+enabled = true
+install_root = ".curd/plugins"
+trusted_keys_file = ".curd/plugins/trusted_keys.json"
+
+# Security
+require_signatures = true
+allow_unsigned_dev_plugins = false
+allow_native_language_dylibs = true
+
+# MCP External Tools
+allow_external_mcp_tool_groups = true
+external_mcp_timeout_secs = 15
+external_mcp_max_output_bytes = 524288  # 512 KB
+external_mcp_max_restarts = 2
+external_mcp_restart_backoff_ms = 250
+
+# Runtime
+tool_runtime = "sidecar_stdio"
+allow_wasm_language_fallback = false
+```
+
+### Plugin Security
+
+<ParamField path="require_signatures" type="boolean" default="true">
+  Require cryptographic signatures on all plugin archives (`.curdl`, `.curdt`)
+</ParamField>
+
+<ParamField path="allow_unsigned_dev_plugins" type="boolean" default="false">
+  Allow unsigned plugins during development (not recommended for production)
+</ParamField>
+
+### MCP Integration
+
+<ParamField path="allow_external_mcp_tool_groups" type="boolean" default="true">
+  Enable external MCP server tool groups
+</ParamField>
+
+<ParamField path="external_mcp_timeout_secs" type="number" default="15">
+  Timeout for external MCP tool calls (in seconds)
+</ParamField>
+
+Source: `curd-core/src/config.rs:163-191`, `curd-core/src/config.rs:421-439`
+
+## Budget Configuration
+
+Runtime resource limits for agent sessions.
+
+```toml settings.toml
+[budget]
+max_tokens = 1000000           # Token budget per session (0 = unlimited)
+max_session_secs = 3600        # Max session duration (1 hour)
+max_hazardous_calls = 50       # Limit on edit/shell/mutate operations
+```
+
+<ParamField path="max_tokens" type="number" default="0">
+  Maximum tokens consumed per session (0 = unlimited)
+</ParamField>
+
+<ParamField path="max_hazardous_calls" type="number" default="null">
+  Cap on high-risk operations (edit, shell, file management)
+</ParamField>
+
+Source: `curd-core/src/config.rs:13-21`
+
+## Collaboration Configuration
+
+Multi-agent and human-agent collaboration settings.
+
+```toml settings.toml
+[collaboration]
+enabled = true
+require_bound_participants = true
+require_session_token_for_agents = true
+bootstrap_owner_human_only = true
+
+human_override_ttl_secs = 300
+default_human_role = "owner"
+default_agent_role = "planner"
+
+editor_can_promote = false
+session_challenge_ttl_secs = 120
+require_authorized_agents_file = true
+```
+
+<Info>
+Collaboration mode enables multi-agent workflows with role-based access control and human oversight.
+</Info>
+
+Source: `curd-core/src/config.rs:97-119`
+
+## Variants Configuration
+
+Parallel variant execution and plan materialization.
+
+```toml settings.toml
+[variants]
+enabled = true
+default_backend = "shadow"         # shadow | worktree
+allow_worktree_backend = false
+materialization = "workspace_copy" # workspace_copy | shadow
+keep_workspaces = true
+
+# Limits
+max_compare_files = 200
+max_plan_bytes = 524288              # 512 KB
+max_materialized_bytes = 67108864    # 64 MB
+max_variants_per_plan_set = 12
+max_plan_sets = 64
+
+# Retention
+retain_plan_sets = 32
+retain_variant_workspaces = 24
+
+require_review_for_promotion = false
+```
+
+Source: `curd-core/src/config.rs:121-149`
+
+## Provenance Configuration
+
+Change tracking and audit trail.
+
+```toml settings.toml
+[provenance]
+enabled = true
+hash_chain = true              # Cryptographic hash chain of changes
+checkpoint_every = 50          # Checkpoint interval
+local_only = true              # Don't publish provenance externally
+```
+
+Source: `curd-core/src/config.rs:151-161`
+
+## Shell Configuration
+
+Containerized and sandboxed shell execution.
+
+```toml settings.toml
+[shell]
+docker_enabled = false
+container_engine = "docker"  # docker | podman
+docker_image = "ubuntu:latest"
+```
+
+<Warning>
+Docker/containerized execution isolates shell commands from the host. Enable this for untrusted workspaces or when running agent-generated commands.
+</Warning>
+
+Source: `curd-core/src/config.rs:1018-1044`
+
+## Validation
+
+CURD validates configuration on load. Check for errors:
+
+```bash
+curd doctor . --strict
+```
+
+### Validation Rules
+
+- Runtime ceiling must be `"full"` or `"lite"`
+- Index mode must be valid: `full`, `fast`, `lazy`, `scoped`
+- Paths must be workspace-relative (no `..` or absolute paths)
+- Build adapter steps cannot be empty
+- Profile capabilities must be recognized atoms
+
+Source: `curd-core/src/config.rs:553-878`
+
+## Example: Complete Configuration
+
+```toml settings.toml
+# Runtime & Profiles
+[runtime]
+ceiling = "full"
+
+[profiles.default]
+role = "human_core"
+capabilities = ["lookup", "traverse", "read", "change.prepare", "change.apply"]
+session_required_for_change = true
+
+# Edit Safety
+[edit]
+churn_limit = 0.25
+enforce_transactional = true
+
+# Index
+[index]
+mode = "fast"
+max_file_size = 5242880  # 5 MB
+
+# Build
+[build]
+preferred_adapter = "cargo"
+default_profile = "debug"
+
+# Policy
+[policy]
+mode = "permissive"
+block_files = ["**/secret*.toml", "credentials.json"]
+allowed_binaries = ["cargo", "npm", "python", "make"]
+
+[policy.exec]
+allow_raw_command = false
+allow_background = true
+```
+
+## See Also
+
+<CardGroup cols={3}>
+  <Card title="Profiles" icon="user-group" href="/configuration/profiles">
+    Role-based access control
+  </Card>
+  <Card title="Policy" icon="shield" href="/configuration/policy">
+    Security enforcement
+  </Card>
+  <Card title="Build Adapters" icon="hammer" href="/configuration/build-adapters">
+    Build system integration
+  </Card>
+</CardGroup>
