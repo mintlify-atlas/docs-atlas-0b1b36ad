@@ -1,0 +1,161 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "Curd",
+  "projectDescription": "A code-intelligence control plane for humans and agents that enables safe code mutation, graph analysis, and workflow automation.",
+  "theme": "aspen",
+  "primaryColor": "#21c0a7",
+  "lightColor": "#092024",
+  "darkColor": "#c5d2d1",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/code-intelligence",
+              "concepts/shadow-workspace",
+              "concepts/profiles-and-runtime"
+            ]
+          },
+          {
+            "group": "Command Reference",
+            "pages": [
+              "commands/search",
+              "commands/graph",
+              "commands/read",
+              "commands/edit",
+              "commands/workspace",
+              "commands/session",
+              "commands/build",
+              "commands/refactor",
+              "commands/test",
+              "commands/repl"
+            ]
+          },
+          {
+            "group": "Workflow Automation",
+            "pages": [
+              "workflows/curd-scripts",
+              "workflows/plan-artifacts",
+              "workflows/script-lifecycle",
+              "workflows/examples"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/settings",
+              "configuration/profiles",
+              "configuration/policy",
+              "configuration/build-adapters"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "extensions/plugin-system",
+              "extensions/language-plugins",
+              "extensions/tool-plugins",
+              "extensions/plugin-trust"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/mcp-server",
+              "integration/python-binding",
+              "integration/nodejs-binding",
+              "integration/docker"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/context-linking",
+              "advanced/sandboxing",
+              "advanced/multi-workspace",
+              "advanced/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Tools",
+            "pages": [
+              "api/tools/overview",
+              "api/tools/search",
+              "api/tools/graph",
+              "api/tools/read",
+              "api/tools/edit",
+              "api/tools/workspace",
+              "api/tools/shell",
+              "api/tools/manage-file"
+            ]
+          },
+          {
+            "group": "DSL Syntax",
+            "pages": [
+              "api/dsl/overview",
+              "api/dsl/statements",
+              "api/dsl/blocks",
+              "api/dsl/metadata"
+            ]
+          },
+          {
+            "group": "MCP Protocol",
+            "pages": [
+              "api/mcp/protocol",
+              "api/mcp/tools",
+              "api/mcp/session-management"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Symbol-aware search with BM25/FTS ranking",
+    "Dependency graph traversal and impact analysis",
+    "Shadow workspace sessions for safe mutation",
+    ".curd script language for workflow automation",
+    "Profile-based capability gating and runtime ceilings",
+    "Plugin system for language and tool extensions",
+    "MCP server for agent integration",
+    "Build adapter system for multiple package managers"
+  ],
+  "publicApiSurface": [
+    "curd init",
+    "curd search <query>",
+    "curd graph <uri>",
+    "curd read <uri>",
+    "curd edit <uri>",
+    "curd workspace begin|commit|rollback|diff",
+    "curd session begin|review|commit|rollback",
+    "curd build [target]",
+    "curd run <script>",
+    "curd plan list|read|edit|impl",
+    "curd test [scope]",
+    "curd refactor rename|move|extract",
+    "curd context add|remove|list",
+    "curd repl",
+    "curd doctor",
+    "curd mcp",
+    "curd plugin-language add|remove|list",
+    "curd plugin-tool add|remove|list",
+    "curd plugin-trust add|remove|enable|disable|list"
+  ]
+}
